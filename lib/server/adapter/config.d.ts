@@ -56,6 +56,7 @@ export type Config = {
     verbatimPrompts: boolean;
     isolate: boolean;
     refusalAsFailure: boolean;
+    replayToolTextLimit: number;
     fastMode: boolean;
     commandBridge: boolean;
     redactSecrets: boolean;
@@ -117,6 +118,7 @@ export declare const Config: z<Schemastery.ObjectS<{
     resume: z<boolean, boolean>;
     idleTimeoutMs: z<number, number>;
     toolTextLimit: z<number, number>;
+    replayToolTextLimit: z<number, number>;
     dshTools: z<boolean, boolean>;
     systemPrompt: z<"claude" | "dsh", "claude" | "dsh">;
     verbatimPrompts: z<boolean, boolean>;
@@ -170,6 +172,7 @@ export declare const Config: z<Schemastery.ObjectS<{
     resume: z<boolean, boolean>;
     idleTimeoutMs: z<number, number>;
     toolTextLimit: z<number, number>;
+    replayToolTextLimit: z<number, number>;
     dshTools: z<boolean, boolean>;
     systemPrompt: z<"claude" | "dsh", "claude" | "dsh">;
     verbatimPrompts: z<boolean, boolean>;
