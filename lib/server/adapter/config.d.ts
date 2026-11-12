@@ -57,6 +57,7 @@ export type Config = {
     isolate: boolean;
     refusalAsFailure: boolean;
     replayToolTextLimit: number;
+    thinkingDisplay: "" | "summarized" | "highlights" | "omitted";
     fastMode: boolean;
     commandBridge: boolean;
     redactSecrets: boolean;
@@ -118,6 +119,7 @@ export declare const Config: z<Schemastery.ObjectS<{
     resume: z<boolean, boolean>;
     idleTimeoutMs: z<number, number>;
     toolTextLimit: z<number, number>;
+    thinkingDisplay: z<"" | "highlights" | "omitted" | "summarized", "" | "highlights" | "omitted" | "summarized">;
     replayToolTextLimit: z<number, number>;
     dshTools: z<boolean, boolean>;
     systemPrompt: z<"claude" | "dsh", "claude" | "dsh">;
@@ -172,6 +174,7 @@ export declare const Config: z<Schemastery.ObjectS<{
     resume: z<boolean, boolean>;
     idleTimeoutMs: z<number, number>;
     toolTextLimit: z<number, number>;
+    thinkingDisplay: z<"" | "highlights" | "omitted" | "summarized", "" | "highlights" | "omitted" | "summarized">;
     replayToolTextLimit: z<number, number>;
     dshTools: z<boolean, boolean>;
     systemPrompt: z<"claude" | "dsh", "claude" | "dsh">;
