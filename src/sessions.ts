@@ -1553,6 +1553,7 @@ export interface RouteCtx {
   targetOf: <T extends string | null>(url: URL, cwd: T) => CwdTarget<T>;
   taskOutput: SessionRouteOptions["taskOutput"];
   spawnMode: SessionRouteOptions["spawnMode"];
+  uiParts: SessionRouteOptions["uiParts"];
   terminalSync: SessionRouteOptions["terminalSync"];
   thinking: SessionRouteOptions["thinking"];
   toolMode: SessionRouteOptions["toolMode"];
@@ -2067,6 +2068,8 @@ export interface SessionRouteOptions {
   };
   /** The keeper switch's facts: the config's `spawn` key and whether this platform runs a keeper. */
   spawnMode?: { info(): import("./adapter/spawn-mode.js").SpawnModeInfo };
+  /** The config keys that decide which of the plugin's controls the web client mounts. */
+  uiParts?: { info(): import("./adapter/ui-parts.js").UiParts };
   /** Terminal sync: whether terminal `/resume` exchanges mirror into the dsh session. */
   terminalSync?: {
     info(): { enabled: boolean };
@@ -2304,6 +2307,7 @@ export function registerSessionRoutes(
     idle,
     toolMode,
     spawnMode,
+    uiParts,
     terminalSync,
     permissionModes,
     thinking,
@@ -2803,6 +2807,7 @@ export function registerSessionRoutes(
       sideQuestions,
       skillDoctor,
       spawnMode,
+      uiParts,
       sshBoxesPath,
       startedIds,
       starters,

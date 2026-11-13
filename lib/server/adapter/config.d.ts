@@ -60,6 +60,8 @@ export type Config = {
     thinkingDisplay: "" | "summarized" | "highlights" | "omitted";
     fastMode: boolean;
     commandBridge: boolean;
+    panel: boolean;
+    permissionControl: "claude" | "dsh";
     redactSecrets: boolean;
     persistTodos: boolean;
     cliCompaction: boolean;
@@ -127,6 +129,8 @@ export declare const Config: z<Schemastery.ObjectS<{
     isolate: z<boolean, boolean>;
     fastMode: z<boolean, boolean>;
     commandBridge: z<boolean, boolean>;
+    panel: z<boolean, boolean>;
+    permissionControl: z<"claude" | "dsh", "claude" | "dsh">;
     redactSecrets: z<boolean, boolean>;
     persistTodos: z<boolean, boolean>;
     cliCompaction: z<boolean, boolean>;
@@ -182,6 +186,8 @@ export declare const Config: z<Schemastery.ObjectS<{
     isolate: z<boolean, boolean>;
     fastMode: z<boolean, boolean>;
     commandBridge: z<boolean, boolean>;
+    panel: z<boolean, boolean>;
+    permissionControl: z<"claude" | "dsh", "claude" | "dsh">;
     redactSecrets: z<boolean, boolean>;
     persistTodos: z<boolean, boolean>;
     cliCompaction: z<boolean, boolean>;

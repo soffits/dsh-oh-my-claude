@@ -1365,9 +1365,12 @@ export class ClaudeCodeAdapter extends LlmAdapter {
     }));
   }
 
-  /** Get the effective permission mode for a session, checking for an override first. */
+  /** Get the effective permission mode for a session, checking for an override first. Under
+   *  `permissionControl: dsh` no control can show or clear an override, so a stored one (picked
+   *  before the switch, or restored with a transcript) is ignored rather than left to steer the
+   *  session unseen. */
   getPermissionMode(sessionId: string, accessMode: string | undefined): string {
-    const override = this.permissionModes.get(sessionId);
+    const override = this.storedOverride(sessionId);
     if (override !== undefined && override !== null) {
       // An override that is no longer allowed under the current ceiling must not win.
       const ceiling = permissionModeFor(this.config, accessMode);
@@ -2152,7 +2155,7 @@ export class ClaudeCodeAdapter extends LlmAdapter {
 
   /** The permission mode a session may use now: its stored override on top of the shield's access mode, with the config default as the floor and every mode up to the ceiling allowed. */
   permissionModeInfo(sessionId: string): PermissionModeInfo {
-    const override = this.permissionModes.get(sessionId) ?? null;
+    const override = this.storedOverride(sessionId) ?? null;
     const accessMode = this.currentAccessMode(sessionId);
     // The shield's mapping is the ceiling; before the first prompt names an access mode the
     // config's own default applies, never the loosest mode.
@@ -2190,6 +2193,13 @@ export class ClaudeCodeAdapter extends LlmAdapter {
     return reply;
   }
 
+  /** A session's stored permission mode override, or undefined when it has none or when
+   *  `permissionControl: dsh` leaves overrides out (see getPermissionMode). */
+  private storedOverride(sessionId: string): string | null | undefined {
+    if (this.config.permissionControl === "dsh") return undefined;
+    return this.permissionModes.get(sessionId);
+  }
+
   /** The body of `setPermissionMode` without the publish: every return path, refused or applied,
    *  ends in the same event so the capsule reads the mode the process is really in. */
   private async applyPermissionMode(
@@ -2197,6 +2207,12 @@ export class ClaudeCodeAdapter extends LlmAdapter {
     mode: string | null,
   ): Promise<PermissionModeReply> {
     let info = this.permissionModeInfo(sessionId);
+    if (mode !== null && this.config.permissionControl === "dsh")
+      return {
+        ...info,
+        live: false,
+        error: "permissionControl is dsh: the mode follows dsh's access presets",
+      };
     if (mode !== null && !isPermissionMode(mode))
       return { ...info, live: false, error: `unknown mode "${mode}"` };
     if (mode !== null && !info.allowed.includes(mode))

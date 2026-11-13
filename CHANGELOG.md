@@ -6,6 +6,10 @@ Versions from 1.0.0 up are on npm. Everything below 1.0.0 was released from the 
 
 ## [Unreleased]
 
+### Added
+
+- Two config keys for a dsh that runs Claude Code only as its model engine. `panel: false` leaves the Oh My Claude button (and its first-run tip) out of the composer, and `permissionControl: dsh` leaves dsh's own permission control in Claude sessions, with its three access presets, in place of the plugin's control with Claude Code's modes. Both default to what the plugin did before. A browser tab follows a change after it reloads, without the button flashing on first.
+
 ### Fixed
 
 - A hot reload of the plugin (a profile edit to its row, a toggle, a code update) no longer ends the turns that are running. The new instance killed every session's Claude as an "older keeper", so the running turn failed with "claude exited -1: no output", and a few seconds later an event built on the old instance threw from a timer and took dsh down. Keepers outlive a reload now, the step in flight reaches dsh through the new instance, and a step that still dies is resumed by the new instance without anyone typing.

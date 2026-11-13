@@ -80,6 +80,7 @@ export function controlsRoutes(ctx: RouteCtx): RouteHandler {
       targetOf,
       terminalSync,
       thinking,
+      uiParts,
       toolMode,
       updateBoxOf,
       updateHints,
@@ -561,6 +562,10 @@ export function controlsRoutes(ctx: RouteCtx): RouteHandler {
     // switch, and whether this platform runs a keeper. Read-only; the switch itself is the hint.
     if (spawnMode && req.method === "GET" && url.pathname === `${ROUTE_PREFIX}/spawn-mode`)
       return json(res, 200, spawnMode.info());
+    // Which of the plugin's controls the client mounts (`panel`, `permissionControl`). Read-only
+    // config facts, read once per page load.
+    if (uiParts && req.method === "GET" && url.pathname === `${ROUTE_PREFIX}/ui-parts`)
+      return json(res, 200, uiParts.info());
     // Terminal sync: whether terminal /resume exchanges mirror into the dsh session. The
     // Tune tab reads it on open; a PUT takes effect at once, no restart.
     if (terminalSync && url.pathname === `${ROUTE_PREFIX}/terminal-sync`) {

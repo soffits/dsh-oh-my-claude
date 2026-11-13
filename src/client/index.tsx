@@ -75,6 +75,7 @@ import {
   WorkspaceModelSwitch,
 } from "./settings-card.js";
 import { ShortcutSwitches } from "./shortcut-switches.js";
+import { watchUiParts } from "./ui-parts.js";
 import { KeeperSwitch } from "./keeper-switch.js";
 import { mountShortcutRows } from "./shortcut-rows.js";
 
@@ -582,13 +583,28 @@ export function apply(ctx: ClientCtx) {
     return null;
   });
 
-  // One Oh My Claude control in the composer's left group.
+  // One Oh My Claude control in the composer's left group, unless the config's `panel` is off.
   ctx.slots.inject("conversation.input.left", () => {
-    ctx.slots.register(
-      { name: "conversation.input.left", id: "oh-my-claude", order: 50 },
-      // Session-scoped slots receive `sessionId` (dsh-client-ui-jobs reads it the same way).
-      (props) =>
-        props.sessionId ? <OhMyClaudeControl sessionId={props.sessionId} ctx={ctx} /> : null,
+    let off: (() => void) | undefined;
+    const stop = watchUiParts(({ panel }) => {
+      if (panel && !off)
+        off = ctx.slots.register(
+          { name: "conversation.input.left", id: "oh-my-claude", order: 50 },
+          // Session-scoped slots receive `sessionId` (dsh-client-ui-jobs reads it the same way).
+          (props) =>
+            props.sessionId ? <OhMyClaudeControl sessionId={props.sessionId} ctx={ctx} /> : null,
+        );
+      else if (!panel && off) {
+        off();
+        off = undefined;
+      }
+    });
+    ctx.effect?.(
+      () => () => {
+        stop();
+        off?.();
+      },
+      "panel-trigger",
     );
     return null;
   });
@@ -620,76 +636,95 @@ export function apply(ctx: ClientCtx) {
     return null;
   });
 
-  // The permission control takes over dsh's composer permission slot (a single cell). Shadowing is
-  // per cell, not per session, so this would also replace dsh's control in a non-Claude session;
-  // register the entry only while the current session is Claude and dispose it otherwise, following
-  // the model picker the way useActiveClaude does. On an older dsh that refuses a second occupant
-  // of the cell the register throws, and we fall back to the DOM-mutating AccessShield in
-  // conversation.input.left.
+  // dsh's own control stays when the config's `permissionControl` is `dsh`.
   ctx.slots.inject("conversation.input.permission", () => {
-    let dispose: (() => void) | undefined;
-    // The active session's model-directory store, so a model switch off a Claude mount re-reads.
-    // Subscribed once per session, never re-subscribed from inside its own notification: a
-    // listener that leaves and rejoins a Set while it is being iterated is visited again, and the
-    // tab spins forever.
-    let providerOff: (() => void) | undefined;
-    let providerFor: string | undefined;
-    const stopProvider = () => {
-      try {
-        providerOff?.();
-      } catch {
-        // A disposed context retires the bundle on its own.
+    let release: (() => void) | undefined;
+    const stop = watchUiParts(({ permissionControl }) => {
+      if (permissionControl === "claude" && !release) release = takeOverPermission(ctx);
+      else if (permissionControl === "dsh" && release) {
+        release();
+        release = undefined;
       }
-      providerOff = undefined;
-      providerFor = undefined;
-    };
-    const sync = () => {
-      const active = activeClaudeSession(ctx);
-      if (active !== providerFor) {
-        stopProvider();
-        if (active) {
-          providerFor = active;
-          try {
-            providerOff = ctx.modelDirectories.directoryFor(active).store.subscribe(sync);
-          } catch {
-            // Unbound in this tab; the list store below still reports the session identity.
-          }
-        }
-      }
-      if (active && !dispose) {
-        try {
-          dispose = ctx.slots.register(
-            {
-              name: "conversation.input.permission",
-              id: "oh-my-claude-access",
-              order: 30,
-              priority: -1,
-            },
-            (props) => <AccessTrigger sessionId={props.sessionId ?? active} ctx={ctx} />,
-          );
-        } catch {
-          // Older dsh refuses a second occupant of the cell; keep the old AccessShield.
-          dispose = ctx.slots.register(
-            { name: "conversation.input.left", id: "claude-access", order: 40 },
-            (props) =>
-              props.sessionId ? <AccessShield sessionId={props.sessionId} ctx={ctx} /> : null,
-          );
-        }
-      } else if (!active && dispose) {
-        dispose();
-        dispose = undefined;
-      }
-    };
-    const listOff = ctx.sessions.list.subscribe?.(sync);
-    sync();
+    });
     ctx.effect?.(
       () => () => {
-        listOff?.();
-        stopProvider();
-        dispose?.();
+        stop();
+        release?.();
       },
       "permission-access-sync",
     );
     return null;
   });
+}
+
+/**
+ * Puts the plugin's permission control in dsh's composer permission slot (a single cell) while the
+ * current session is Claude and gives the slot back otherwise. Shadowing is per cell, not per
+ * session, so a standing entry would also replace dsh's control in a non-Claude session; the entry
+ * follows the model picker the way useActiveClaude does. On an older dsh that refuses a second
+ * occupant of the cell the register throws, and the DOM-mutating AccessShield in
+ * conversation.input.left takes its place. Returns the function that undoes it all; dsh's own
+ * control is back once that has run.
+ */
+function takeOverPermission(ctx: ClientCtx): () => void {
+  let dispose: (() => void) | undefined;
+  // The active session's model-directory store, so a model switch off a Claude mount re-reads.
+  // Subscribed once per session, never re-subscribed from inside its own notification: a
+  // listener that leaves and rejoins a Set while it is being iterated is visited again, and the
+  // tab spins forever.
+  let providerOff: (() => void) | undefined;
+  let providerFor: string | undefined;
+  const stopProvider = () => {
+    try {
+      providerOff?.();
+    } catch {
+      // A disposed context retires the bundle on its own.
+    }
+    providerOff = undefined;
+    providerFor = undefined;
+  };
+  const sync = () => {
+    const active = activeClaudeSession(ctx);
+    if (active !== providerFor) {
+      stopProvider();
+      if (active) {
+        providerFor = active;
+        try {
+          providerOff = ctx.modelDirectories.directoryFor(active).store.subscribe(sync);
+        } catch {
+          // Unbound in this tab; the list store below still reports the session identity.
+        }
+      }
+    }
+    if (active && !dispose) {
+      try {
+        dispose = ctx.slots.register(
+          {
+            name: "conversation.input.permission",
+            id: "oh-my-claude-access",
+            order: 30,
+            priority: -1,
+          },
+          (props) => <AccessTrigger sessionId={props.sessionId ?? active} ctx={ctx} />,
+        );
+      } catch {
+        // Older dsh refuses a second occupant of the cell; keep the old AccessShield.
+        dispose = ctx.slots.register(
+          { name: "conversation.input.left", id: "claude-access", order: 40 },
+          (props) =>
+            props.sessionId ? <AccessShield sessionId={props.sessionId} ctx={ctx} /> : null,
+        );
+      }
+    } else if (!active && dispose) {
+      dispose();
+      dispose = undefined;
+    }
+  };
+  const listOff = ctx.sessions.list.subscribe?.(sync);
+  sync();
+  return () => {
+    listOff?.();
+    stopProvider();
+    dispose?.();
+  };
 }

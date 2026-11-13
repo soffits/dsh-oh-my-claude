@@ -160,6 +160,7 @@ export {
 
 import { probeLogin, reconcileSshBoxes, type SshBoxMount } from "./adapter/ssh-boxes.js";
 import { ClaudeCodeAdapter } from "./adapter/class.js";
+import { uiPartsOf } from "./adapter/ui-parts.js";
 // The entry keeps its export list while the split runs.
 export { ClaudeCodeAdapter } from "./adapter/class.js";
 
@@ -402,6 +403,7 @@ export function apply(ctx: PluginContext, config: Schemastery.TypeT<typeof Confi
         set: (mode: ToolMode) => adapter.setToolMode(mode),
       },
       spawnMode: { info: () => adapter.spawnModeInfo() },
+      uiParts: { info: () => uiPartsOf(adapter.config) },
       terminalSync: {
         info: () => adapter.terminalSyncInfo(),
         set: (enabled: boolean) => adapter.setTerminalSync(enabled),

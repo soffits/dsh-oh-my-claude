@@ -373,7 +373,10 @@ export declare class ClaudeCodeAdapter extends LlmAdapter {
         id: string;
         name: string;
     }>>;
-    /** Get the effective permission mode for a session, checking for an override first. */
+    /** Get the effective permission mode for a session, checking for an override first. Under
+     *  `permissionControl: dsh` no control can show or clear an override, so a stored one (picked
+     *  before the switch, or restored with a transcript) is ignored rather than left to steer the
+     *  session unseen. */
     getPermissionMode(sessionId: string, accessMode: string | undefined): string;
     /** The working directory a session runs in, read from its header, or undefined when the session is unknown or its header throws (a detached session cannot be read). */
     sessionCwd(sessionId: string): string | undefined;
@@ -552,6 +555,9 @@ export declare class ClaudeCodeAdapter extends LlmAdapter {
      * launched below bypass can never be switched up live, whatever it was set to since.
      */
     setPermissionMode(sessionId: string, mode: string | null): Promise<PermissionModeReply>;
+    /** A session's stored permission mode override, or undefined when it has none or when
+     *  `permissionControl: dsh` leaves overrides out (see getPermissionMode). */
+    private storedOverride;
     /** The body of `setPermissionMode` without the publish: every return path, refused or applied,
      *  ends in the same event so the capsule reads the mode the process is really in. */
     private applyPermissionMode;

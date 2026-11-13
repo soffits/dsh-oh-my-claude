@@ -642,6 +642,7 @@ export interface RouteCtx {
     targetOf: <T extends string | null>(url: URL, cwd: T) => CwdTarget<T>;
     taskOutput: SessionRouteOptions["taskOutput"];
     spawnMode: SessionRouteOptions["spawnMode"];
+    uiParts: SessionRouteOptions["uiParts"];
     terminalSync: SessionRouteOptions["terminalSync"];
     thinking: SessionRouteOptions["thinking"];
     toolMode: SessionRouteOptions["toolMode"];
@@ -834,6 +835,10 @@ export interface SessionRouteOptions {
     /** The keeper switch's facts: the config's `spawn` key and whether this platform runs a keeper. */
     spawnMode?: {
         info(): import("./adapter/spawn-mode.js").SpawnModeInfo;
+    };
+    /** The config keys that decide which of the plugin's controls the web client mounts. */
+    uiParts?: {
+        info(): import("./adapter/ui-parts.js").UiParts;
     };
     /** Terminal sync: whether terminal `/resume` exchanges mirror into the dsh session. */
     terminalSync?: {
@@ -1054,7 +1059,7 @@ declare function sessionTranscript(box: MountBox, dir: string, sessionId: string
 /** True when this session already had one within the gap. Records the ask when it does not. */
 declare function recapIsRepeat(sessionId: string, now: number): boolean;
 /** `projectDir(cwd)` → Claude Code project dir; `startedIds()` → ids the adapter started itself. */
-export declare function registerSessionRoutes(ctx: PluginContext, { log, onHeal, projectDir, projectsDir, startedIds, claudeIdOf, settingsPath, configDir, boxesPath, importedDir, sshBoxesPath, onSshBoxes, remoteWorkspacesPath, onRemoteWorkspaces, command, boxCommand, sshHost, turnRecords, dshVersion, liveTurn, events, idle, toolMode, spawnMode, terminalSync, permissionModes, thinking, rewind, contextUsage, skillDoctor, workspaceDiff, permissionReadout, hookRuns, askAside, mcp, permissionAsks, sideQuestions, liveTasks, stopTask, taskOutput, compactNow, steersFor, holdSteers, releaseHold, sendSteerNow, loginNeeded, sessionFallbacks, boxOfSession, claudeUpdated, loginDone, logoutDone, liveCount, persistAsides, starters, setStarter, models, offeredModels, pickerModels, modelsUpdated, setCustomModels, providerId, reloadPlugins, reloadSkills, pluginErrors, pluginWarnings, awaiting, continueAfterLimit, instanceFor, instanceForHost, onLoginStatus, }: SessionRouteOptions): void;
+export declare function registerSessionRoutes(ctx: PluginContext, { log, onHeal, projectDir, projectsDir, startedIds, claudeIdOf, settingsPath, configDir, boxesPath, importedDir, sshBoxesPath, onSshBoxes, remoteWorkspacesPath, onRemoteWorkspaces, command, boxCommand, sshHost, turnRecords, dshVersion, liveTurn, events, idle, toolMode, spawnMode, uiParts, terminalSync, permissionModes, thinking, rewind, contextUsage, skillDoctor, workspaceDiff, permissionReadout, hookRuns, askAside, mcp, permissionAsks, sideQuestions, liveTasks, stopTask, taskOutput, compactNow, steersFor, holdSteers, releaseHold, sendSteerNow, loginNeeded, sessionFallbacks, boxOfSession, claudeUpdated, loginDone, logoutDone, liveCount, persistAsides, starters, setStarter, models, offeredModels, pickerModels, modelsUpdated, setCustomModels, providerId, reloadPlugins, reloadSkills, pluginErrors, pluginWarnings, awaiting, continueAfterLimit, instanceFor, instanceForHost, onLoginStatus, }: SessionRouteOptions): void;
 /** One settings file as the Diagnostics tab reports it: where it is, and why the CLI refuses it. */
 export interface DiagnosticFile {
     scope: SettingsScope;
