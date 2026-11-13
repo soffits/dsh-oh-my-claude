@@ -625,11 +625,19 @@ import {
 // session_title_changed frames are consumed by noteTitle: the name is kept, onTitle fires once
 // per change, and the echo of a name the adapter already set is a no-op
 {
-  const proc: { title?: string; seen: string[]; onTitle?: (t: string) => void } = { seen: [] };
+  const proc: {
+    title?: string;
+    titleReported: boolean;
+    seen: string[];
+    onTitle?: (t: string) => void;
+  } = { titleReported: false, seen: [] };
   proc.onTitle = (t) => proc.seen.push(t);
   const note = ClaudeProcess.prototype.noteTitle;
   const frame = (title: string) =>
     JSON.stringify({ type: "system", subtype: "session_title_changed", title });
+  assert.equal(note.call(proc, frame("Chat-1")), true, "the startup name is consumed");
+  assert.deepEqual(proc.seen, [], "but is no rename: a resumed CLI repeats a stale name");
+  assert.equal(proc.title, "Chat-1", "it is kept to compare later reports against");
   assert.equal(note.call(proc, frame("  Probe title ")), true, "consumed");
   assert.deepEqual(proc.seen, ["Probe title"], "fired with the trimmed name");
   assert.equal(note.call(proc, frame("Probe title")), true, "the echo is consumed too");

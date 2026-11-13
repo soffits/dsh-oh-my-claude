@@ -2037,6 +2037,11 @@ export class ClaudeProcess {
   title?: string;
   /** Fires after `title` changes, so the adapter can rename dsh's session to match. */
   onTitle?: (title: string) => void;
+  /** Whether this process has reported a name yet. The CLI announces its stored name once when it
+   *  starts, which is not a rename: on a resume that name is whatever dsh last sent (a Telegram
+   *  topic's placeholder, say), and passing it on pinned that stale name over the title dsh had
+   *  generated since. So the first report only sets `title`. */
+  titleReported = false;
   /** A result line passed since the last prompt went out. A suggestion is stored only then: the
    *  CLI aborts its in-flight guess on new input, so a frame that still lands after a prompt was
    *  written is for the turn before it. Set by the readline handler, cleared by the prompt write. */
@@ -2210,7 +2215,8 @@ export class ClaudeProcess {
   }
 
   /** True when `line` is a `session_title_changed` frame, which is then consumed. The name is
-   *  stored on `title` and `onTitle` fires only when it differs from the last one, so the echo
+   *  stored on `title` and `onTitle` fires only when it differs from the last one and is not the
+   *  name the CLI announces at startup (`titleReported`), so the echo
    *  the CLI sends back for a `rename_session` the adapter wrote is a no-op. An empty name (the
    *  CLI clearing one) is consumed and ignored: dsh has no notion of an unnamed live session. */
   noteTitle(line: string): boolean {
@@ -2227,6 +2233,10 @@ export class ClaudeProcess {
     const title = typeof r.title === "string" ? r.title.trim() : "";
     if (title === "" || title === this.title) return true;
     this.title = title;
+    if (!this.titleReported) {
+      this.titleReported = true;
+      return true;
+    }
     try {
       this.onTitle?.(title);
     } catch {
