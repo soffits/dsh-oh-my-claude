@@ -732,7 +732,11 @@ function writePortFile(file: string, port: number): void {
 export function webServerBase(webServer: Pick<WebServer, "port" | "host">): string {
   const host = webServer.host?.trim() ?? "";
   const wildcard = host === "" || host === "0.0.0.0" || host === "::" || host === "[::]";
-  const addr = wildcard ? "127.0.0.1" : host.includes(":") && !host.startsWith("[") ? `[${host}]` : host;
+  const addr = wildcard
+    ? "127.0.0.1"
+    : host.includes(":") && !host.startsWith("[")
+      ? `[${host}]`
+      : host;
   return `http://${addr}:${webServer.port}`;
 }
 

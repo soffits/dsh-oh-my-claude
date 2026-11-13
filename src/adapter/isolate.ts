@@ -77,7 +77,9 @@ export function engineDigest(config: {
     thinking === "";
   if (plain) return undefined;
   const text = JSON.stringify(
-    thinking === "" ? [builtinTools, toolLoading, isolate] : [builtinTools, toolLoading, isolate, thinking],
+    thinking === ""
+      ? [builtinTools, toolLoading, isolate]
+      : [builtinTools, toolLoading, isolate, thinking],
   );
   return createHash("sha256").update(text).digest("hex").slice(0, 16);
 }
