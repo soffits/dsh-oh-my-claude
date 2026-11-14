@@ -410,8 +410,8 @@ export declare class ClaudeCodeAdapter extends LlmAdapter {
     readonly refused: Map<string, Promise<void>>;
     /**
      * Forget a refused Claude session: stop its process, wait (at most ten seconds) for it to exit so
-     * nothing writes the transcript after it is gone, then delete the transcript and its folder and
-     * the started mark. The next turn starts that session id afresh, from dsh's own log, in which the
+     * nothing writes the transcript after it is gone, then move the transcript and its folder aside
+     * (renamed with a `.refused-<time>` suffix) and forget the started mark. The next turn starts that session id afresh, from dsh's own log, in which the
      * refused reply is kept as a failed attempt and never shown to a model. Never throws.
      */
     dropRefused(proc: ClaudeProcess, cwd: string, id: string): Promise<void>;
@@ -431,9 +431,6 @@ export declare class ClaudeCodeAdapter extends LlmAdapter {
     carryHides(path?: string): Promise<void>;
     /** Pending rows the command bridge queued, so one edited into plain text can leave the queue. */
     readonly commandRows: CommandRows;
-    /** Every command line the plugin queued as a user turn (bridged commands, both `/compact`s),
-     *  so the prompt path sends it uncomposed under `verbatimPrompts` (`isOwnCommandTurn`). */
-    readonly ownCommands: CommandRows;
     /** Sessions already warned that `toolsInline: false` is ignored on a versioned session format. */
     readonly rowsRefused: Set<string>;
     /** Sessions already warned that dsh had no one to answer an approval. */
@@ -462,6 +459,12 @@ export declare class ClaudeCodeAdapter extends LlmAdapter {
     private ultracodeSaved;
     /** dsh session id → the tool names its last init frame reported; absent until one arrives. */
     readonly sessionTools: Map<string, string[]>;
+    /** dsh session id → the command names the CLI last reported (init or commands_changed); absent
+     *  until one arrives. Read by `composedFor`. */
+    readonly sessionCommands: Map<string, string[]>;
+    /** Whether a stdin line for `sessionId` goes marked as written (`verbatimPrompts`): never for a
+     *  slash line naming one of the CLI's commands, which the mark would stop it dispatching. */
+    composedFor(sessionId: string | undefined, text: string): boolean;
     /** dsh session id → the plugins its last init frame said the CLI failed to load. Absent until an
      *  init frame arrives; a clean load clears it. A session adopted from the keeper after a dsh
      *  restart sees no new init frame, so it reads clean until its next fresh spawn.

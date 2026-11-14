@@ -95,10 +95,10 @@ export type Config = {
   idleTimeoutMs: number;
   toolTextLimit: number;
   dshTools: boolean;
+  refusalAsFailure: boolean;
   systemPrompt: "claude" | "dsh";
   verbatimPrompts: boolean;
   isolate: boolean;
-  refusalAsFailure: boolean;
   replayToolTextLimit: number;
   thinkingDisplay: "" | "summarized" | "highlights" | "omitted";
   fastMode: boolean;
@@ -259,7 +259,7 @@ export const Config = z.object({
     .min(0)
     .default(2000)
     .description(
-      "Characters of each tool call's input and each tool result kept when dsh's history is sent to Claude as text: a turn another model worked, or the whole conversation when a new Claude session starts (its transcript gone, a fork, a refusal under refusalAsFailure). 0 keeps them whole, so a Claude session rebuilt from dsh's log loses nothing",
+      "Characters of each tool call's input and each tool result kept when dsh's history is sent to Claude as text: a turn another model worked, or the whole conversation when a new Claude session starts (its transcript gone, a fork). 0 keeps them whole, so a Claude session rebuilt from dsh's log loses nothing",
     ),
   dshTools: z
     .boolean()
@@ -329,7 +329,7 @@ export const Config = z.object({
     .boolean()
     .default(false)
     .description(
-      "End a turn whose reply Claude refused, or a safety classifier stopped with no fallback model, as a failure with code REFUSAL instead of a normal stop, so a fallback plugin (dsh-fallback-models) can continue it on another model. The session's Claude transcript is then deleted, so the refusal does not steer later turns: the next turn on Claude starts a new Claude session from dsh's own log",
+      "End a turn whose reply Claude refused, or a safety classifier stopped with no fallback model, as a failure with code REFUSAL instead of a normal stop, so a fallback plugin (dsh-fallback-models) can continue it on another model. The session's Claude transcript is then moved aside, never deleted, so the refusal does not steer later turns: the next turn on Claude starts a new Claude session from dsh's own log",
     ),
   continueAfterLimit: z
     .boolean()

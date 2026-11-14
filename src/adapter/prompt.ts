@@ -88,6 +88,19 @@ const isTurn = (m: LooseMessage, developer = false) =>
   (developer && m.role === "developer" && textOf(m.content).trim() !== "");
 
 /**
+ * Whether `text` is one slash line naming a command the CLI has, which has to reach it as a
+ * command even under `verbatimPrompts` (a line marked as written is never dispatched). `known` is
+ * the session's command list from the CLI's init frame; before one arrives, any `/name` in dsh's
+ * command grammar counts, so a bridged command on a fresh process is not sent as plain text. A
+ * path such as `/home/x` has a slash in its name and never matches.
+ */
+export function isCliCommandLine(text: string, known: readonly string[] | undefined): boolean {
+  const m = /^\/([a-z0-9_-]+)(?:\s|$)/.exec(text.trimStart());
+  if (!m) return false;
+  return known === undefined || known.includes(m[1] ?? "");
+}
+
+/**
  * dsh's system prompt for a loop-built request: the text of the latest run of system-role
  * messages, after a one-shot caller's `system`. A loop-built request leads with one system
  * message, and a prompt that changed during the session is a later system message holding the
@@ -99,7 +112,10 @@ export function dshSystemPrompt(
 ): string | undefined {
   const all = messages ?? [];
   let end = all.length - 1;
-  while (end >= 0 && all[end]?.role !== "system") end--;
+  // An emptied system message is skipped: dsh blanks the later ones when a session moves to a
+  // route that is not in-history, and stopping there dropped the prompt for good.
+  while (end >= 0 && !(all[end]?.role === "system" && textOf(all[end]?.content).trim() !== ""))
+    end--;
   let start = end;
   while (start > 0 && all[start - 1]?.role === "system") start--;
   const parts = [system ?? ""];
@@ -309,9 +325,10 @@ export function buildPrompt(
   // needs one, so that turn goes out with an empty drop set: failing a turn is a worse answer than
   // sending the block it was about. The live case is the runtime snapshot, which re-sends itself
   // whenever the file or approval policy changes and can arrive as the only message of a turn.
-  // `withoutNativeInstructions` still applies on this path, and should: dropping dsh's duplicate of
-  // a CLAUDE.md the CLI loads itself is not one of the switches, it is what the adapter has always
-  // done, and re-sending the copy here would double the file rather than rescue the turn.
+  // `withoutNativeInstructions` still applies on this path wherever the CLI loads CLAUDE.md itself:
+  // dropping dsh's duplicate is not one of the switches, it is what the adapter has always done,
+  // and re-sending the copy here would double the file rather than rescue the turn. Under
+  // `isolate` the CLI loads none, so `copies.claudeMd` keeps dsh's copy instead.
   const parts = filtered.length > 0 ? filtered : partsOf(turns, new Set(), cap, copies);
   if (!parts.some((t) => t.role === "user")) {
     // Attachment-only turn: the user sent an image (or other non-text block) with no typed

@@ -52,10 +52,10 @@ export type Config = {
     idleTimeoutMs: number;
     toolTextLimit: number;
     dshTools: boolean;
+    refusalAsFailure: boolean;
     systemPrompt: "claude" | "dsh";
     verbatimPrompts: boolean;
     isolate: boolean;
-    refusalAsFailure: boolean;
     replayToolTextLimit: number;
     thinkingDisplay: "" | "summarized" | "highlights" | "omitted";
     fastMode: boolean;

@@ -9538,39 +9538,8 @@ console.log("interrupt-on-abort ok");
   adapter.disposeProcesses();
 }
 {
-  // verbatimPrompts sends prompts with `client_composed`, which tells the CLI not to dispatch slash
-  // commands; a command line the plugin queued itself still has to run as one, or a typed
-  // `/compact` reaches Claude as text (2026-11-13). The same words typed as plain text stay composed.
-  const adapter = new ClaudeCodeAdapter(
-    // SAFETY: partial fake for tests; PluginContext requires many fields not used here
-    { on() {} } as unknown as PluginContext,
-    Config({ verbatimPrompts: true }),
-  );
-  const lineOf = async (id: string) =>
-    JSON.parse(
-      (
-        await adapter.prepare({
-          messages: messageList([
-            {
-              id,
-              role: "user",
-              source: { kind: "user" },
-              content: [{ type: "text", text: "/compact" }],
-            },
-          ]),
-        } as never)
-      ).input ?? "{}",
-    );
-  assert.equal((await lineOf("typed")).client_composed, true, "plain text stays composed");
-  adapter.ownCommands.add("queued");
-  const own = await lineOf("queued");
-  assert.equal(own.client_composed, undefined, "the plugin's own command line goes as a command");
-  assert.equal(own.message.content[0].text, "/compact");
-  adapter.disposeProcesses();
-}
-{
-  // The context card's button queues `/compact` the way the typed command does: remembered as the
-  // plugin's own command line, and dsh's check before that turn's step stands down.
+  // The context card's button queues `/compact` the way the typed command does: dsh's check
+  // before that turn's step stands down.
   const sent: Array<{ id?: string }> = [];
   const adapter = new ClaudeCodeAdapter(
     // SAFETY: partial fake for tests; PluginContext requires many fields not used here
@@ -9582,7 +9551,6 @@ console.log("interrupt-on-abort ok");
   })) as never;
   assert.deepEqual(await adapter.compactNow("s9"), { ok: true });
   assert.equal(sent.length, 1);
-  assert.equal(adapter.ownCommands.has(sent[0]!.id), true, "remembered as a command line");
   assert.equal(adapter.compactQueued.has("s9"), true, "dsh's own compaction stands down");
 }
 {

@@ -2,7 +2,7 @@
 // Declarations here came out of src/adapter.ts unchanged, each with the comment above it.
 import { execFile } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { access, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { existsSync, watch } from "node:fs";
 import { dirname } from "node:path";
 import { hostname, tmpdir } from "node:os";
@@ -39,7 +39,7 @@ import { managedDir } from "../instructions.js";
 import { readUsage, stillLimitedUntil } from "../usage.js";
 import { MCP_PATH, type McpBridge } from "../mcp.js";
 import { KEY_ENV } from "../mcp-config.js";
-import { ISOLATED_ENV, engineDigest } from "./isolate.js";
+import { ISOLATED_ENV, engineConfigFor, engineDigest } from "./isolate.js";
 import {
   type ClaudeEvent,
   ClaudeProcess,
@@ -323,18 +323,12 @@ import {
   relayFileHandles,
   selectTurns,
   dshSystemPrompt,
+  isCliCommandLine,
   STEER_COPY_CAP_MS,
   steerKey,
   textOf,
 } from "./prompt.js";
-import {
-  busyEnterOf,
-  CommandRows,
-  commandNameOf,
-  isOwnCommandTurn,
-  leavesQueue,
-  lineReceipt,
-} from "./lane.js";
+import { busyEnterOf, CommandRows, commandNameOf, leavesQueue, lineReceipt } from "./lane.js";
 import {
   accessModeOf,
   approvalsDisabled,
@@ -398,6 +392,7 @@ import {
   STREAM_MAX_MS,
   STREAM_THRESHOLD_MS,
   TOOL_IDLE_FACTOR,
+  loadRelayImages,
   toolResultFor,
   TRANSCRIPT_SETTLE_MS,
   TURN_RING,
@@ -754,7 +749,7 @@ export class ClaudeCodeAdapter extends LlmAdapter {
           continue;
         }
         const uuid = randomUUID();
-        if (proc.write(buildInput(text, [], uuid, this.config.verbatimPrompts))) {
+        if (proc.write(buildInput(text, [], uuid, this.composedFor(session?.id, text)))) {
           proc.sent.add(key);
           proc.steerPending = true;
           proc.forwarded += 1;
@@ -1551,18 +1546,34 @@ export class ClaudeCodeAdapter extends LlmAdapter {
 
   /**
    * Forget a refused Claude session: stop its process, wait (at most ten seconds) for it to exit so
-   * nothing writes the transcript after it is gone, then delete the transcript and its folder and
-   * the started mark. The next turn starts that session id afresh, from dsh's own log, in which the
+   * nothing writes the transcript after it is gone, then move the transcript and its folder aside
+   * (renamed with a `.refused-<time>` suffix) and forget the started mark. The next turn starts that session id afresh, from dsh's own log, in which the
    * refused reply is kept as a failed attempt and never shown to a model. Never throws.
    */
   async dropRefused(proc: ClaudeProcess, cwd: string, id: string): Promise<void> {
     proc.kill();
     await Promise.race([proc.child.done, new Promise((r) => setTimeout(r, 10_000).unref?.())]);
     const dir = join(this.claudeHome, "projects", projectDirName(cwd));
-    await rm(join(dir, `${id}.jsonl`), { force: true }).catch(() => {});
-    await rm(join(dir, id), { recursive: true, force: true }).catch(() => {});
+    // Moved aside, never deleted: for a session opened from a Claude Code transcript the id is the
+    // person's own, and `claude --resume` and the panel's reseed still need that file.
+    const stamp = Date.now();
+    // A transcript that is not there (never written) is fine; one that would not move stays where
+    // the next turn will resume it, and the log says so rather than claiming it moved.
+    let stuck: string | undefined;
+    try {
+      await rename(join(dir, `${id}.jsonl`), join(dir, `${id}.jsonl.refused-${stamp}`));
+    } catch (error) {
+      if (!(error instanceof Error && "code" in error && error.code === "ENOENT"))
+        stuck = errorText(error);
+    }
+    await rename(join(dir, id), join(dir, `${id}.refused-${stamp}`)).catch(() => {});
     await rememberStarted(id, false).catch(() => {});
-    this.log("info", `claude session ${id} refused a reply; its transcript was dropped`);
+    if (stuck)
+      this.log(
+        "warn",
+        `claude session ${id} refused a reply; its transcript did not move: ${stuck}`,
+      );
+    else this.log("info", `claude session ${id} refused a reply; its transcript was moved aside`);
   }
 
   /** Everything one turn needs: spawn args + spec for the long-lived process, and the stdin line for this turn. */
@@ -1619,7 +1630,9 @@ export class ClaudeCodeAdapter extends LlmAdapter {
         own ||
         (await loadStarted()).has(id) ||
         (await claudeSessionExists(this.claudeHome, cwd, id));
-      if (!known && !forceFresh) known = await this.forkTranscript(options, cwd, id);
+      // Not after a refusal: the transcript just moved aside, and a fork would resume the parent's
+      // conversation in its place instead of starting fresh from dsh's log.
+      if (!known && !forceFresh && !refused) known = await this.forkTranscript(options, cwd, id);
       session = { id, resuming: known && !forceFresh };
     }
     // One small file read per turn, next to a process spawn. No cache: the Settings card writes
@@ -1661,9 +1674,14 @@ export class ClaudeCodeAdapter extends LlmAdapter {
     );
     // Under `systemPrompt: dsh` the prompt dsh wrote replaces Claude Code's (`buildArgs`).
     const dshSystem = dshMode ? dshSystemPrompt(options.messages, options.system) : undefined;
+    // `isolate` covers local spawns only: its environment (no CLAUDE.md, no telemetry) goes into
+    // the local child's env, and a box's claude keeps its own settings and CLAUDE.md, so neither
+    // its flags nor the CLAUDE.md copy apply there. Mixed, a box's CLI read its CLAUDE.md while
+    // dsh's copy was kept as well.
+    const engineConfig = engineConfigFor(this.config, targetHost);
     // Claude Code loads no CLAUDE.md under `isolate` and expands no `/skill` line under
     // `verbatimPrompts`, so dsh's copies of those are then the only ones and are kept.
-    const copies = { claudeMd: !this.config.isolate, skills: !this.config.verbatimPrompts };
+    const copies = { claudeMd: !engineConfig.isolate, skills: !this.config.verbatimPrompts };
     let prompt = buildPrompt(turns, drops, this.config.replayToolTextLimit, copies);
     // A turn on a box reads that box's disk, so what was attached here follows it there.
     if (targetHost)
@@ -1691,7 +1709,7 @@ export class ClaudeCodeAdapter extends LlmAdapter {
     // Hoisted out of the buildArgs call: `buildArgs` appends the tools guidance to the system
     // prompt exactly when this bridge is passed, so the size readout has to ask the same question
     // rather than a similar-looking one. A turn that runs on a box gets no bridge: its URL is this
-    // dsh's loopback port, which the far side cannot reach, and `dshTools` is per mount while a
+    // dsh's own web address, which the far side cannot reach, and `dshTools` is per mount while a
     // remote workspace makes a session remote under the local mount (measured on a remote box 2026-09-15:
     // Claude spent its first reply asking for a tool server that was never reachable).
     const mcpBridge =
@@ -1717,7 +1735,7 @@ export class ClaudeCodeAdapter extends LlmAdapter {
     const args = buildArgs({
       ...options,
       model,
-      config: this.config,
+      config: engineConfig,
       session,
       accessMode,
       flags: cli.flags,
@@ -1785,14 +1803,8 @@ export class ClaudeCodeAdapter extends LlmAdapter {
       session,
       spec,
       accessMode,
-      // The plugin's own command lines go uncomposed, so the CLI still dispatches them.
       input: stdin
-        ? buildInput(
-            prompt,
-            images,
-            undefined,
-            this.config.verbatimPrompts && !isOwnCommandTurn(turns, prompt, this.ownCommands),
-          )
+        ? buildInput(prompt, images, undefined, this.composedFor(options.sessionId, prompt))
         : null,
       drops,
       copies,
@@ -1832,9 +1844,6 @@ export class ClaudeCodeAdapter extends LlmAdapter {
 
   /** Pending rows the command bridge queued, so one edited into plain text can leave the queue. */
   readonly commandRows = new CommandRows();
-  /** Every command line the plugin queued as a user turn (bridged commands, both `/compact`s),
-   *  so the prompt path sends it uncomposed under `verbatimPrompts` (`isOwnCommandTurn`). */
-  readonly ownCommands = new CommandRows();
   /** Sessions already warned that `toolsInline: false` is ignored on a versioned session format. */
   readonly rowsRefused = new Set<string>();
   /** Sessions already warned that dsh had no one to answer an approval. */
@@ -1863,6 +1872,16 @@ export class ClaudeCodeAdapter extends LlmAdapter {
   private ultracodeSaved: Promise<void> = Promise.resolve();
   /** dsh session id → the tool names its last init frame reported; absent until one arrives. */
   readonly sessionTools = new Map<string, string[]>();
+  /** dsh session id → the command names the CLI last reported (init or commands_changed); absent
+   *  until one arrives. Read by `composedFor`. */
+  readonly sessionCommands = new Map<string, string[]>();
+
+  /** Whether a stdin line for `sessionId` goes marked as written (`verbatimPrompts`): never for a
+   *  slash line naming one of the CLI's commands, which the mark would stop it dispatching. */
+  composedFor(sessionId: string | undefined, text: string): boolean {
+    if (!this.config.verbatimPrompts) return false;
+    return !isCliCommandLine(text, sessionId ? this.sessionCommands.get(sessionId) : undefined);
+  }
   /** dsh session id → the plugins its last init frame said the CLI failed to load. Absent until an
    *  init frame arrives; a clean load clears it. A session adopted from the keeper after a dsh
    *  restart sees no new init frame, so it reads clean until its next fresh spawn.
@@ -1966,7 +1985,6 @@ export class ClaudeCodeAdapter extends LlmAdapter {
                       content: [{ type: "text", text: "/compact" }],
                       source: { kind: "user" },
                     });
-                    this.ownCommands.add(line.id);
                     target.followup(line);
                     return {
                       kind: "success",
@@ -2107,7 +2125,6 @@ export class ClaudeCodeAdapter extends LlmAdapter {
             // Read before the line is queued: on an idle session `followup` starts the turn at
             // once, and the receipt would call a line that is already running queued.
             const status = target.status;
-            this.ownCommands.add(queued.id);
             target.followup(queued);
             // Remembered so an edit that turns the row into plain text can steer it.
             this.commandRows.add(queued.id);
@@ -2482,7 +2499,9 @@ export class ClaudeCodeAdapter extends LlmAdapter {
         // turn over, stdin would start a turn of its own; out of `sent`, dsh's delivery carries it.
         if (
           proc.busy &&
-          proc.write(buildInput(waiting.text, [], randomUUID(), this.config.verbatimPrompts))
+          proc.write(
+            buildInput(waiting.text, [], randomUUID(), this.composedFor(sessionId, waiting.text)),
+          )
         ) {
           proc.forwarded += 1;
           proc.steerPending = true;
@@ -2566,7 +2585,6 @@ export class ClaudeCodeAdapter extends LlmAdapter {
         agent.steer(m);
         continue;
       }
-      this.ownCommands.add(m.id);
       agent.followup(m);
       this.commandRows.add(m.id);
     }
@@ -3421,7 +3439,6 @@ export class ClaudeCodeAdapter extends LlmAdapter {
         content: [{ type: "text", text: "/compact" }],
         source: { kind: "user" },
       });
-      this.ownCommands.add(line.id);
       // As for a typed `/compact`: dsh's own check before that turn's step stands down.
       this.compactQueued.add(sessionId);
       found.agent.followup(line);
@@ -4293,6 +4310,12 @@ export class ClaudeCodeAdapter extends LlmAdapter {
           join(this.stateDir, "resume.log"),
           `kept keeper ${basename(dir)} for ${spec.sessionId}: its process outlived a hot reload`,
         );
+        // Its hooks still point at the instance that spawned it; this one is the live one now.
+        const kept = this.processes.get(key2);
+        if (kept) {
+          kept.onIdleResult = () => this.wake(spec.sessionId, kept);
+          this.hookProcess(kept, spec.sessionId);
+        }
         continue;
       }
       if (this.processes.has(key2)) {
@@ -4384,7 +4407,10 @@ export class ClaudeCodeAdapter extends LlmAdapter {
   /** Whether the scope `apply` mounted this instance in is still live; false once a hot reload or
    *  a toggle disposed it, while a step it was streaming may still be running. */
   scopeActive(): boolean {
-    return contextActive(this.mountedCtx);
+    // A profile config edit re-applies the plugin in the same fiber, so `uid` stays set and the
+    // context alone reads active: ask the registry too, which names the instance mounted last.
+    const now = mountedInstance<ClaudeCodeAdapter>(this.providerId);
+    return contextActive(this.mountedCtx) && (now === undefined || now === this);
   }
 
   /**
@@ -5391,7 +5417,8 @@ export class ClaudeCodeAdapter extends LlmAdapter {
     // words at all, so it takes the prompt path's wording for an attachment-only turn. Skipping it
     // would lose it: the next prompt starts after this turn's reply (`selectTurns`).
     const body = [text, notes].filter(Boolean).join("\n\n") || "(see attached)";
-    if (!proc.write(buildInput(body, images, uuid, this.config.verbatimPrompts))) return false;
+    if (!proc.write(buildInput(body, images, uuid, this.composedFor(options.sessionId, body))))
+      return false;
     proc.sent.add(key);
     return true;
   }
@@ -5435,7 +5462,7 @@ export class ClaudeCodeAdapter extends LlmAdapter {
       this.publishAsides(cont.options.sessionId);
       const live = this.liveTurn.get(cont.options.sessionId);
       if (live) live.relay = undefined;
-      // An MCP tool result is text, so a steer carrying an image goes over stdin whole instead: the
+      // A steer's image is not part of dsh's tool result, so a steer carrying one goes over stdin whole instead: the
       // CLI injects it at its next tool call. Its key lands in `sent`, which keeps its words out of
       // the result below. Left to the result, the image was lost: the next prompt starts after
       // this step's own reply (`selectTurns`), so it never went anywhere. `relays` is already
@@ -5450,14 +5477,9 @@ export class ClaudeCodeAdapter extends LlmAdapter {
       const extra = stepContextFor(cont.options.messages, prep.drops, proc.sent, prep.copies);
       // An image in dsh's result (read_image) goes back as MCP image content; dropped, Claude
       // would read the text line about the image and never see it. On a box the bridge is off.
-      for (const result of cont.results) {
-        if (!result.refs) continue;
-        const loaded = await this.loadImages(result.refs, cont.options.signal);
-        result.images = loaded.flatMap((i) =>
-          i.data ? [{ mediaType: i.mediaType, data: i.data }] : [],
-        );
-        delete result.refs;
-      }
+      await loadRelayImages(cont.results, this.ctx.attachments, cont.options.signal, (msg) =>
+        this.log("warn", msg),
+      );
       relays.forEach((relay, i) => {
         const result = cont.results[i];
         if (!result) return; // cannot happen: results were built from relays.keys()
@@ -5930,7 +5952,10 @@ export class ClaudeCodeAdapter extends LlmAdapter {
         if (options.sessionId && pluginWarnings !== undefined)
           this.sessionPluginWarnings.set(options.sessionId, pluginWarnings);
         const agent = this.ctx?.agents?.get?.(options.sessionId);
-        if (names.length > 0) this.bridgeCommands(names, agent);
+        if (names.length > 0) {
+          if (options.sessionId) this.sessionCommands.set(options.sessionId, names);
+          this.bridgeCommands(names, agent);
+        }
         this.mountCompactOverride(agent);
       },
       onModel: (rec) => {
@@ -6331,7 +6356,7 @@ export class ClaudeCodeAdapter extends LlmAdapter {
       // A refused reply ended the turn as a failure: the session's Claude transcript, refusal
       // and all, is dropped, so the next turn on this route starts a new Claude session from dsh's
       // log instead of resuming one whose last word was the refusal.
-      if (tr.refusal && this.config.refusalAsFailure && prep.session)
+      if (tr.refusalEnded && prep.session)
         this.refused.set(options.sessionId, this.dropRefused(proc, prep.cwd, prep.session.id));
       options.signal?.removeEventListener("abort", onAbort);
       for (const c of pending.values()) c.abort();
@@ -6777,8 +6802,9 @@ export class ClaudeCodeAdapter extends LlmAdapter {
       // sessions service unavailable in this scope: fall through to the catalog
     }
     if (logVersion === 0) logVersion = (await currentLogVersion()) ?? 0;
-    if (text === RESTART_TEXT) {
-      // A notice from a previous boot may still sit in the durable inbox: do not stack another.
+    if (text === RESTART_TEXT || text === RELOAD_TEXT) {
+      // A notice from a previous boot or reload may still sit in the durable inbox: do not stack
+      // another (the old instance's idle wake and the new one's takeover can both reach here).
       try {
         const session = this.ctx?.sessions?.get?.(asSessionId(sessionId));
         if (
@@ -6786,6 +6812,7 @@ export class ClaudeCodeAdapter extends LlmAdapter {
           hasPendingNotice(session.snapshotEvents(), "dsh-oh-my-claude", [
             RESTART_TEXT,
             RECONNECT_TEXT,
+            RELOAD_TEXT,
           ])
         ) {
           await trace(`wake ${sessionId}: restart notice already pending, not stacking another`);
