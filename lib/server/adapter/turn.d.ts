@@ -92,6 +92,10 @@ export interface ResultFrame {
  *  API's 401 once a stored token has been revoked. The one test both the error text and the login
  *  card key on, so they cannot disagree about what counts. */
 export declare function isLoginFailure(result: ResultFrame): boolean;
+/** Cloudflare's challenge page in front of the API (2026-11-13: "Failed to authenticate. API Error:
+ *  403 Attention Required! | Cloudflare"). The CLI words it like a login failure, but nothing is
+ *  wrong with the login and the next request usually passes. */
+export declare const isEdgeBlock: (result: ResultFrame) => boolean;
 /**
  * On an error result it builds the message a person sees: it names the box the turn ran on and,
  * for a 5xx, appends the incident the status page reports so the failure reads as the provider's.

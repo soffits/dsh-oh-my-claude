@@ -59,6 +59,9 @@ export declare class ClaudeCodeAdapter extends LlmAdapter {
     /** Probe targets already written to resume.log, so the line lands once per binary, not per turn. */
     probeTraced: Set<string>;
     sessionController?: SessionController;
+    /** Sessions dsh refused to resume for good (a subagent's log: "owned by subagent routing").
+     *  A wake for one can never open a turn, so the retry loops stop asking. */
+    readonly unwakeable: Set<string>;
     /** What a heal needs from dsh, handed over by the session routes; undefined until they load. */
     heal?: HealHost;
     /** Masks secret env values in tool results; undefined when `redactSecrets` is off. */
