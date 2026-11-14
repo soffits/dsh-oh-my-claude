@@ -6244,6 +6244,31 @@ console.log("interrupt-on-abort ok");
   console.log("drain-adopted ok");
 }
 
+// wake: a session dsh had to resume gets its `dsh` server reconnected before the notice's turn
+// starts, so the first turn after a restart has dsh's tools; a live agent is not touched.
+{
+  const adapter = new ClaudeCodeAdapter(fakeCtx({ on() {} }), Config({}));
+  (adapter as any).mcp = { url: "http://x", key: "k" };
+  const order: string[] = [];
+  const proc: any = { alive: true, busy: false, hasTurnOutput: () => true };
+  adapter.reconnectBridge = async () => {
+    order.push("reconnect");
+    return true;
+  };
+  let how = "resumed";
+  adapter.agentFor = async () => ({
+    agent: { followup: () => order.push("followup") } as unknown as Agent,
+    how,
+  });
+  assert.equal(await adapter.wake("w1", proc), true);
+  assert.deepEqual(order, ["reconnect", "followup"], "reconnect before the turn opens");
+  order.length = 0;
+  how = "live";
+  assert.equal(await adapter.wake("w2", proc), true);
+  assert.deepEqual(order, ["followup"], "a live agent has a bridge already");
+  console.log("wake reconnects first ok");
+}
+
 // reconnectBridge: with the bridge mounted, a reattached process is told mcp_reconnect for the
 // `dsh` server; without a bridge nothing is sent.
 {

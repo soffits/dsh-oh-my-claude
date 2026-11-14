@@ -6735,6 +6735,12 @@ export class ClaudeCodeAdapter extends LlmAdapter {
       }
       await trace(`wake ${sessionId}: agent ${how}, sending followup`);
     }
+    // A session dsh had to resume has no bridge agent until now, so the Claude process that
+    // survived a restart could not reconnect its `dsh` server before this moment; the notice's turn
+    // would start without dsh's tools (2026-11-14 00:45: the first turn after a restart reported
+    // "the dsh MCP server didn't connect"). Reconnect first, on a short beat; a miss only marks the
+    // bridge stale for the next turn boundary.
+    if (proc && how.startsWith("resumed")) await this.reconnectBridge(proc, sessionId, 300, 10);
     try {
       this.log("info", `wake: idle reply in session ${sessionId} (agent ${how})`);
       // Restart and reconnect notices stand in for the owner who configured hands-free resume, so
