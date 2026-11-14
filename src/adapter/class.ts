@@ -443,6 +443,9 @@ export class ClaudeCodeAdapter extends LlmAdapter {
   /** Probe targets already written to resume.log, so the line lands once per binary, not per turn. */
   probeTraced = new Set<string>();
   sessionController?: SessionController;
+  /** Sessions dsh refused to resume for good (a subagent's log: "owned by subagent routing").
+   *  A wake for one can never open a turn, so the retry loops stop asking. */
+  readonly unwakeable = new Set<string>();
   /** What a heal needs from dsh, handed over by the session routes; undefined until they load. */
   heal?: HealHost;
   /** Masks secret env values in tool results; undefined when `redactSecrets` is off. */
@@ -4310,6 +4313,9 @@ export class ClaudeCodeAdapter extends LlmAdapter {
       if (proc.busy) return true; // a prompt got there first; the turn drains the queue itself
       if (!proc.hasTurnOutput()) continue;
       if (await this.wake(sessionId, proc, text)) return true;
+      // dsh will never resume this session (a subagent's): asking again every 2 s for a minute
+      // only fills resume.log.
+      if (this.unwakeable.has(sessionId)) return false;
     }
     return false;
   }
@@ -5145,6 +5151,7 @@ export class ClaudeCodeAdapter extends LlmAdapter {
         // one (takeInterrupted consumes its id at 10 s, the sweep runs at 15 s), so a refusal the
         // plugin mends is healed here and the resume tried once more.
         const text = errorText(error);
+        if (/owned by subagent routing/i.test(text)) this.unwakeable.add(sessionId);
         const path = rawLogPath(text);
         if (path !== undefined && knownRefusal(text) && this.heal) {
           const { verdict } = await healLog(this.heal, sessionId, path, text);

@@ -155,9 +155,18 @@ const resultMessage = (result: ResultFrame): string => {
 export function isLoginFailure(result: ResultFrame): boolean {
   return (
     result.is_error === true &&
+    !isEdgeBlock(result) &&
     (result.api_error_status === 401 || NOT_LOGGED_IN_RE.test(resultMessage(result)))
   );
 }
+
+/** Cloudflare's challenge page in front of the API (2026-11-13: "Failed to authenticate. API Error:
+ *  403 Attention Required! | Cloudflare"). The CLI words it like a login failure, but nothing is
+ *  wrong with the login and the next request usually passes. */
+export const isEdgeBlock = (result: ResultFrame): boolean =>
+  result.is_error === true &&
+  (result.api_error_status === 403 || /API Error: 403/i.test(resultMessage(result))) &&
+  /attention required|cloudflare/i.test(resultMessage(result));
 
 /** The API's refusal of a model id, as the CLI words it, or its 404 when the wording moves. */
 const isModelRefusal = (result: ResultFrame): boolean =>
@@ -187,6 +196,10 @@ export function finishReason(
     let message = resultMessage(result);
     if (routerOnly !== undefined && isModelRefusal(result))
       message = serverText("modelNeedsRouter", { model: routerOnly });
+    // A transient block at the edge, not a login and not the model's fault: a retryable failure,
+    // so dsh's own retry and a fallback chain treat it like any other server-side hiccup.
+    if (isEdgeBlock(result) && via === undefined)
+      return { kind: "error", failure: { message, code: "SERVER" } };
     if (settingsKey !== undefined && isLoginFailure(result)) {
       const refused = serverText("keyRefused", { host: settingsKey.host, detail: message });
       message = settingsKey.split === undefined ? refused : `${refused} ${settingsKey.split}`;

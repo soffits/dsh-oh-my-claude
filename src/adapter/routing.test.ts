@@ -15,7 +15,7 @@ import {
   withCustomModels,
 } from "./catalog.js";
 import { settingsEnvAt } from "../sessions.js";
-import { finishReason } from "./turn.js";
+import { finishReason, isLoginFailure } from "./turn.js";
 import {
   routeEnvIn,
   routeOf,
@@ -504,3 +504,23 @@ assert.match(
   }
 }
 console.log("ok routing");
+
+// A Cloudflare challenge in front of the API is not a login failure: no "log in" advice, and a code a
+// retry or a fallback chain acts on.
+{
+  const blocked = {
+    is_error: true,
+    result: "Failed to authenticate. API Error: 403 Attention Required! | Cloudflare",
+    api_error_status: 403,
+  };
+  assert.equal(isLoginFailure(blocked), false);
+  const reason = finishReason(blocked, "this-box");
+  assert.equal(reason.kind, "error");
+  if (reason.kind === "error") {
+    assert.equal(reason.failure.code, "SERVER");
+    assert.doesNotMatch(reason.failure.message, /not logged in/);
+  }
+  const revoked = { is_error: true, result: "Failed to authenticate. API Error: 401 invalid token" };
+  assert.equal(isLoginFailure(revoked), true, "a real login failure still reads as one");
+  console.log("edge block ok");
+}

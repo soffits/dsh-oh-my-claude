@@ -6229,6 +6229,18 @@ console.log("interrupt-on-abort ok");
   proc.busy = true;
   await adapter.drainAdopted(proc, "d", 1, 5);
   assert.equal(calls.length, 0, "busy: a turn is already draining");
+  // A session dsh refuses to resume for good (a subagent's): one refusal ends the loop.
+  calls.length = 0;
+  proc.busy = false;
+  proc.queue = new LineQueue();
+  proc.queue.push(JSON.stringify({ type: "result", subtype: "success", is_error: false }));
+  adapter.wake = async (id) => {
+    calls.push(id);
+    adapter.unwakeable.add(id);
+    return false;
+  };
+  await adapter.drainAdopted(proc, "sub", 1, 10);
+  assert.equal(calls.length, 1, "a permanent refusal is asked once, not every tick");
   console.log("drain-adopted ok");
 }
 
