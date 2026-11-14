@@ -520,7 +520,10 @@ console.log("ok routing");
     assert.equal(reason.failure.code, "SERVER");
     assert.doesNotMatch(reason.failure.message, /not logged in/);
   }
-  const revoked = { is_error: true, result: "Failed to authenticate. API Error: 401 invalid token" };
+  const revoked = {
+    is_error: true,
+    result: "Failed to authenticate. API Error: 401 invalid token",
+  };
   assert.equal(isLoginFailure(revoked), true, "a real login failure still reads as one");
   console.log("edge block ok");
 }
