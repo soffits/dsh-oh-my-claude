@@ -9,7 +9,14 @@ import type { PluginContext } from "../dsh.js";
 import { tempDir } from "../test-tmp.js";
 import { ClaudeCodeAdapter } from "./class.js";
 import { Config } from "./config.js";
-import { busyEnterOf, CommandRows, commandNameOf, leavesQueue, lineReceipt } from "./lane.js";
+import {
+  busyEnterOf,
+  CommandRows,
+  commandNameOf,
+  isOwnCommandTurn,
+  leavesQueue,
+  lineReceipt,
+} from "./lane.js";
 import type { LooseMessage } from "./prompt.js";
 
 /** A person's pending message with one text block. */
@@ -30,6 +37,21 @@ assert.equal(commandNameOf("please /unslop this"), undefined);
 assert.equal(commandNameOf("/"), undefined);
 assert.equal(commandNameOf("/ tmp is full"), undefined);
 assert.equal(commandNameOf(""), undefined);
+
+// A prompt is the plugin's own command line only when it opens with the command and the turn holds a
+// row the plugin queued that is still a command; the same words typed by a person stay text.
+{
+  const own = new CommandRows();
+  own.add("c");
+  assert.equal(isOwnCommandTurn([row("c", "/compact")], "/compact", own), true);
+  assert.equal(isOwnCommandTurn([row("t", "/compact")], "/compact", own), false, "typed as text");
+  assert.equal(isOwnCommandTurn([row("c", "now compact")], "now compact", own), false, "edited");
+  assert.equal(
+    isOwnCommandTurn([row("c", "/compact")], "[user]\ncontext\n\n/compact", own),
+    false,
+    "context in front: not a command line either way",
+  );
+}
 
 // Only a row the bridge queued, typed by a person, whose words stopped being a command, leaves.
 {

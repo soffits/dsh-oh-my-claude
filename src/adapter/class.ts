@@ -326,7 +326,14 @@ import {
   steerKey,
   textOf,
 } from "./prompt.js";
-import { busyEnterOf, CommandRows, commandNameOf, leavesQueue, lineReceipt } from "./lane.js";
+import {
+  busyEnterOf,
+  CommandRows,
+  commandNameOf,
+  isOwnCommandTurn,
+  leavesQueue,
+  lineReceipt,
+} from "./lane.js";
 import {
   accessModeOf,
   approvalsDisabled,
@@ -1777,7 +1784,15 @@ export class ClaudeCodeAdapter extends LlmAdapter {
       session,
       spec,
       accessMode,
-      input: stdin ? buildInput(prompt, images, undefined, this.config.verbatimPrompts) : null,
+      // The plugin's own command lines go uncomposed, so the CLI still dispatches them.
+      input: stdin
+        ? buildInput(
+            prompt,
+            images,
+            undefined,
+            this.config.verbatimPrompts && !isOwnCommandTurn(turns, prompt, this.ownCommands),
+          )
+        : null,
       drops,
       copies,
       sizes,
@@ -1816,6 +1831,9 @@ export class ClaudeCodeAdapter extends LlmAdapter {
 
   /** Pending rows the command bridge queued, so one edited into plain text can leave the queue. */
   readonly commandRows = new CommandRows();
+  /** Every command line the plugin queued as a user turn (bridged commands, both `/compact`s),
+   *  so the prompt path sends it uncomposed under `verbatimPrompts` (`isOwnCommandTurn`). */
+  readonly ownCommands = new CommandRows();
   /** Sessions already warned that `toolsInline: false` is ignored on a versioned session format. */
   readonly rowsRefused = new Set<string>();
   /** Sessions already warned that dsh had no one to answer an approval. */
@@ -1943,12 +1961,12 @@ export class ClaudeCodeAdapter extends LlmAdapter {
                     const status = target.status;
                     // Not remembered in `commandRows`: `compactQueued` already expects this row
                     // to run as `/compact`, so an edit into plain text leaves it in the queue.
-                    target.followup(
-                      createUserMessage({
-                        content: [{ type: "text", text: "/compact" }],
-                        source: { kind: "user" },
-                      }),
-                    );
+                    const line = createUserMessage({
+                      content: [{ type: "text", text: "/compact" }],
+                      source: { kind: "user" },
+                    });
+                    this.ownCommands.add(line.id);
+                    target.followup(line);
                     return {
                       kind: "success",
                       text: lineReceipt("/compact", status, serverText("compactSent")),
@@ -2088,6 +2106,7 @@ export class ClaudeCodeAdapter extends LlmAdapter {
             // Read before the line is queued: on an idle session `followup` starts the turn at
             // once, and the receipt would call a line that is already running queued.
             const status = target.status;
+            this.ownCommands.add(queued.id);
             target.followup(queued);
             // Remembered so an edit that turns the row into plain text can steer it.
             this.commandRows.add(queued.id);
@@ -2546,6 +2565,7 @@ export class ClaudeCodeAdapter extends LlmAdapter {
         agent.steer(m);
         continue;
       }
+      this.ownCommands.add(m.id);
       agent.followup(m);
       this.commandRows.add(m.id);
     }
@@ -3396,12 +3416,14 @@ export class ClaudeCodeAdapter extends LlmAdapter {
     const found = await this.agentFor(sessionId);
     if (!found) return { ok: false, error: "session not reachable" };
     try {
-      found.agent.followup(
-        createUserMessage({
-          content: [{ type: "text", text: "/compact" }],
-          source: { kind: "user" },
-        }),
-      );
+      const line = createUserMessage({
+        content: [{ type: "text", text: "/compact" }],
+        source: { kind: "user" },
+      });
+      this.ownCommands.add(line.id);
+      // As for a typed `/compact`: dsh's own check before that turn's step stands down.
+      this.compactQueued.add(sessionId);
+      found.agent.followup(line);
     } catch (error) {
       return { ok: false, error: errorText(error) };
     }

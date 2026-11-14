@@ -4908,6 +4908,7 @@ console.log("approval outcomes ok");
     signal: new AbortController().signal,
   });
   assert.deepEqual(sent, ["/compact"], "sent to Claude as the next user message");
+  assert.equal(a.compactQueued.has("s1"), true);
   assert.equal(ok.kind, "success");
   assert.equal(ok.text, "/compact sent to Claude Code");
   // Typed while a turn runs it has only been queued, and the receipt says so.
@@ -9535,6 +9536,54 @@ console.log("interrupt-on-abort ok");
   assert.ok(!(prep.input ?? "").includes("CATALOG"), "and the built input has no catalog in it");
   assert.ok((prep.input ?? "").includes("do the thing"), "the typed turn still reached the CLI");
   adapter.disposeProcesses();
+}
+{
+  // verbatimPrompts sends prompts with `client_composed`, which tells the CLI not to dispatch slash
+  // commands; a command line the plugin queued itself still has to run as one, or a typed
+  // `/compact` reaches Claude as text (2026-11-13). The same words typed as plain text stay composed.
+  const adapter = new ClaudeCodeAdapter(
+    // SAFETY: partial fake for tests; PluginContext requires many fields not used here
+    { on() {} } as unknown as PluginContext,
+    Config({ verbatimPrompts: true }),
+  );
+  const lineOf = async (id: string) =>
+    JSON.parse(
+      (
+        await adapter.prepare({
+          messages: messageList([
+            {
+              id,
+              role: "user",
+              source: { kind: "user" },
+              content: [{ type: "text", text: "/compact" }],
+            },
+          ]),
+        } as never)
+      ).input ?? "{}",
+    );
+  assert.equal((await lineOf("typed")).client_composed, true, "plain text stays composed");
+  adapter.ownCommands.add("queued");
+  const own = await lineOf("queued");
+  assert.equal(own.client_composed, undefined, "the plugin's own command line goes as a command");
+  assert.equal(own.message.content[0].text, "/compact");
+  adapter.disposeProcesses();
+}
+{
+  // The context card's button queues `/compact` the way the typed command does: remembered as the
+  // plugin's own command line, and dsh's check before that turn's step stands down.
+  const sent: Array<{ id?: string }> = [];
+  const adapter = new ClaudeCodeAdapter(
+    // SAFETY: partial fake for tests; PluginContext requires many fields not used here
+    { on() {} } as unknown as PluginContext,
+    Config({ verbatimPrompts: true }),
+  );
+  adapter.agentFor = (async () => ({
+    agent: { followup: (m: { id?: string }) => sent.push(m) },
+  })) as never;
+  assert.deepEqual(await adapter.compactNow("s9"), { ok: true });
+  assert.equal(sent.length, 1);
+  assert.equal(adapter.ownCommands.has(sent[0]!.id), true, "remembered as a command line");
+  assert.equal(adapter.compactQueued.has("s9"), true, "dsh's own compaction stands down");
 }
 {
   // contextSizes: what each dsh block cost this turn, measured before any switch removed it.
