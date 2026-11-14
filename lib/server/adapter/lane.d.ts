@@ -30,3 +30,10 @@ export declare function busyEnterOf(read: LocaleSettingsReader | undefined): "qu
  *  and it cannot be changed later, so it states what happened then and promises nothing about the
  *  row. `status` is the agent's from before the line was queued; `sent` is the idle wording. */
 export declare const lineReceipt: (line: string, status: string | undefined, sent: string) => string;
+/** Whether a turn's prompt is a command line the plugin itself queued (a bridged command, the
+ *  agent-scoped `/compact`, the context card's `/compact`), so it has to reach Claude Code as a
+ *  command: under `verbatimPrompts` every other prompt goes with `client_composed`, which tells
+ *  the CLI not to dispatch slash commands, and a typed `/compact` reached Claude as text
+ *  (2026-11-13). Only when the prompt itself opens with the command: one with dsh's context in
+ *  front would not run as a command either way, so it stays as written. */
+export declare function isOwnCommandTurn(turns: readonly LooseMessage[], prompt: string, rows: CommandRows): boolean;

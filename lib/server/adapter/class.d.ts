@@ -431,6 +431,9 @@ export declare class ClaudeCodeAdapter extends LlmAdapter {
     carryHides(path?: string): Promise<void>;
     /** Pending rows the command bridge queued, so one edited into plain text can leave the queue. */
     readonly commandRows: CommandRows;
+    /** Every command line the plugin queued as a user turn (bridged commands, both `/compact`s),
+     *  so the prompt path sends it uncomposed under `verbatimPrompts` (`isOwnCommandTurn`). */
+    readonly ownCommands: CommandRows;
     /** Sessions already warned that `toolsInline: false` is ignored on a versioned session format. */
     readonly rowsRefused: Set<string>;
     /** Sessions already warned that dsh had no one to answer an approval. */
