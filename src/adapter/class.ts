@@ -98,6 +98,7 @@ import type {
   JsonValue,
   PluginContext,
   SessionController,
+  SessionObservationLease,
   SubprocessRuntime,
 } from "../dsh.js";
 import {
@@ -371,6 +372,7 @@ import {
   INTERRUPT_GRACE_MS,
   interruptOnAbort,
   isLoginFailure,
+  childrenContinuedText,
   isStaleResume,
   killAfterGrace,
   LIMIT_GRACE_MS,
@@ -414,6 +416,23 @@ import {
   WATCH_LOOKBACK_BYTES,
 } from "./turn.js";
 
+/** The parent of a subagent's session and whether a restart notice already waits in its inbox, or
+ *  undefined for any other session: a fork carries a parent too, but dsh resumes it like a root. */
+function subagentLinkOf(
+  header: { parentSession?: string; origin?: string },
+  events: () => Iterable<{ type: string; data?: unknown }>,
+): { parentId: string; noticePending: boolean } | undefined {
+  if (header.origin !== "subagent" || !header.parentSession) return undefined;
+  return {
+    parentId: String(header.parentSession),
+    noticePending: hasPendingNotice(events(), "dsh-oh-my-claude", [
+      RESTART_TEXT,
+      RECONNECT_TEXT,
+      RELOAD_TEXT,
+    ]),
+  };
+}
+
 /** The LlmAdapter that drives the logged-in Claude Code CLI: it owns the live `claude` processes, bridges dsh's commands and routes into them, and mirrors their transcript back into dsh. */
 export class ClaudeCodeAdapter extends LlmAdapter {
   /** The context `apply` mounted this instance with. Read it through `ctx`. */
@@ -456,6 +475,9 @@ export class ClaudeCodeAdapter extends LlmAdapter {
   /** Sessions dsh refused to resume for good (a subagent's log: "owned by subagent routing").
    *  A wake for one can never open a turn, so the retry loops stop asking. */
   readonly unwakeable = new Set<string>();
+  /** Subagent sessions this process continued through their parent, by parent id, so the parent's
+   *  own restart notice can name them and the parent does not hand them the work again. */
+  readonly continuedChildren = new Map<string, Set<string>>();
   /** What a heal needs from dsh, handed over by the session routes; undefined until they load. */
   heal?: HealHost;
   /** Masks secret env values in tool results; undefined when `redactSecrets` is off. */
@@ -3972,7 +3994,11 @@ export class ClaudeCodeAdapter extends LlmAdapter {
       log,
       `boot: interrupted=${JSON.stringify(ids)} live=${JSON.stringify([...this.processes.keys()])}`,
     );
-    for (const id of ids) {
+    // Subagents first, so a parent's notice can name the ones continued through it.
+    const isChild = new Map<string, boolean>();
+    for (const id of ids) isChild.set(id, (await this.subagentLink(id)) !== undefined);
+    const ordered = ids.toSorted((a, b) => Number(isChild.get(b)) - Number(isChild.get(a)));
+    for (const id of ordered) {
       // The other dsh on this box runs this session's keeper or hold: the turn is alive there, and
       // the nudge is that dsh's to send. Put back for its own boot (#241 review).
       if (this.foreignSessions.has(id)) {
@@ -6973,6 +6999,8 @@ export class ClaudeCodeAdapter extends LlmAdapter {
     const note = (line: string) =>
       trace(join(this.stateDir, "resume.log"), `wake ${sessionId}: ${line}`);
     if (text === RESTART_TEXT) await trace(`wake ${sessionId}: start`);
+    const child = await this.subagentLink(sessionId);
+    if (child) return this.wakeThroughParent(sessionId, child, text);
     const found = await this.agentFor(sessionId);
     if (!found) return false;
     const { agent, how } = found;
@@ -7014,6 +7042,12 @@ export class ClaudeCodeAdapter extends LlmAdapter {
     // "the dsh MCP server didn't connect"). Reconnect first, on a short beat; a miss only marks the
     // bridge stale for the next turn boundary.
     if (proc && how.startsWith("resumed")) await this.reconnectBridge(proc, sessionId, 300, 10);
+    // Subagents this process already continued through this session: its notice names them once.
+    const continued =
+      text === RESTART_TEXT || text === RECONNECT_TEXT || text === RELOAD_TEXT
+        ? this.continuedChildren.get(sessionId)
+        : undefined;
+    const extra = continued?.size ? childrenContinuedText([...continued]) : undefined;
     try {
       this.log("info", `wake: idle reply in session ${sessionId} (agent ${how})`);
       // Restart and reconnect notices stand in for the owner who configured hands-free resume, so
@@ -7033,7 +7067,12 @@ export class ClaudeCodeAdapter extends LlmAdapter {
       }
       agent.followup(
         createUserMessage({
-          content: [{ type: "text", text }],
+          // The extra line rides in a block of its own, so the notice block stays exactly `text`
+          // and the pending-notice check still knows it.
+          content: [
+            { type: "text", text },
+            ...(extra ? [{ type: "text" as const, text: extra }] : []),
+          ],
           // SAFETY: the plugin builds against dsh-llm 0.1.6 types, whose MessageSource still spells
           // the v3 `{ kind: "plugin", plugin }` wrapper; dsh 0.1.7's v4 log refuses exactly that
           // shape at runtime and takes the producer-owned kind instead. The runtime is the
@@ -7045,6 +7084,10 @@ export class ClaudeCodeAdapter extends LlmAdapter {
       this.log("warn", `wake after idle reply failed: ${errorText(error)}`);
       await note(`followup failed: ${errorText(error)}`);
       return false;
+    }
+    if (extra) {
+      this.continuedChildren.delete(sessionId);
+      await note(`told it about continued subagents ${[...(continued ?? [])].join(", ")}`);
     }
     await note(`followup sent (agent ${how})`);
     if (text === RESTART_TEXT) {
@@ -7070,6 +7113,89 @@ export class ClaudeCodeAdapter extends LlmAdapter {
         }, delayMs);
       }
     }
+    return true;
+  }
+
+  /** The parent of a subagent's session, and whether a restart notice already waits in its inbox;
+   *  undefined for any other session (a fork carries a parent too, but dsh resumes it like any
+   *  root). Read from the live session when dsh holds it, else from the log without loading it. */
+  async subagentLink(
+    sessionId: string,
+  ): Promise<{ parentId: string; noticePending: boolean } | undefined> {
+    try {
+      const live = this.ctx?.sessions?.get?.(asSessionId(sessionId));
+      if (live) return subagentLinkOf(live.header, () => live.snapshotEvents());
+    } catch {
+      // sessions service unavailable in this scope: read the log instead
+    }
+    let lease: SessionObservationLease | undefined;
+    try {
+      lease = await this.ctx?.get?.("sessionQuery")?.observeSession(asSessionId(sessionId), {
+        projectionMode: "none",
+      });
+      return lease ? subagentLinkOf(lease.header, () => lease?.events ?? []) : undefined;
+    } catch {
+      // no log to read (a session of another dsh, or none at all): not a subagent's for this wake
+      return undefined;
+    } finally {
+      lease?.[Symbol.dispose]();
+    }
+  }
+
+  /** Wake a subagent's session through its parent. dsh resumes a subagent only through subagent
+   *  routing (`resolveAgent` refuses one: "owned by subagent routing"), so the notice goes as a
+   *  message from the exact live parent, which cold-resumes the child from its log on the child's
+   *  own model and preset. The child reports back to that parent when it finishes, as it would
+   *  have without the restart. */
+  async wakeThroughParent(
+    sessionId: string,
+    child: { parentId: string; noticePending: boolean },
+    text: string,
+  ): Promise<boolean> {
+    const note = (line: string) =>
+      trace(join(this.stateDir, "resume.log"), `wake ${sessionId}: ${line}`);
+    const continuation = text === RESTART_TEXT || text === RECONNECT_TEXT || text === RELOAD_TEXT;
+    if (continuation && child.noticePending) {
+      await note("restart notice already pending, not stacking another");
+      return true;
+    }
+    const subagents = this.ctx?.get?.("subagents");
+    if (!subagents) {
+      this.unwakeable.add(sessionId);
+      await note("no subagent service to reach a subagent's session through");
+      return false;
+    }
+    let parent: Agent | undefined;
+    try {
+      parent = this.ctx.agents.get(asSessionId(child.parentId));
+      if (!parent && this.sessionController)
+        parent = resolvedAgent(await this.sessionController.resolveAgent(child.parentId));
+    } catch (error) {
+      const reason = errorText(error);
+      // The parent is a subagent itself, which only its own parent reaches: one level deeper than
+      // this wake goes.
+      if (/owned by subagent routing/i.test(reason)) this.unwakeable.add(sessionId);
+      await note(`parent ${child.parentId} unavailable: ${reason}`);
+      return false;
+    }
+    if (!parent) {
+      await note(`no agent for parent ${child.parentId}`);
+      return false;
+    }
+    try {
+      await subagents.sendMessage(parent, asSessionId(sessionId), [{ type: "text", text }], {
+        signal: AbortSignal.timeout(30_000),
+      });
+    } catch (error) {
+      this.log("warn", `wake through parent failed: ${errorText(error)}`);
+      await note(`message through parent ${child.parentId} failed: ${errorText(error)}`);
+      return false;
+    }
+    if (continuation) {
+      const set = this.continuedChildren.get(child.parentId) ?? new Set<string>();
+      this.continuedChildren.set(child.parentId, set.add(sessionId));
+    }
+    await note(`followup sent through parent ${child.parentId}`);
     return true;
   }
 
