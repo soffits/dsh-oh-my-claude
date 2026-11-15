@@ -223,6 +223,9 @@ export declare const RESTART_TEXT = "[Oh My Claude] dsh restarted while this tur
 /** Added to a parent's restart notice when some of its subagents were continued through it, so the
  *  parent waits for their reports instead of sending them the work a second time. */
 export declare function childrenContinuedText(childIds: readonly string[]): string;
+/** How long a subagent woken through its parent ignores further wakes: long enough for the turn
+ *  the message opened to start and mark the process busy. */
+export declare const WAKE_THROUGH_PARENT_HOLD_MS = 10000;
 /** How long after boot to nudge interrupted sessions; dsh needs its sessions and agents loaded. */
 export declare const RESUME_DELAY_MS = 10000;
 /** Slack after a usage limit's reset instant before the continue notice goes out. */

@@ -374,6 +374,7 @@ import {
   isLoginFailure,
   childrenContinuedText,
   isStaleResume,
+  WAKE_THROUGH_PARENT_HOLD_MS,
   killAfterGrace,
   LIMIT_GRACE_MS,
   LIMIT_TEXT,
@@ -478,6 +479,7 @@ export class ClaudeCodeAdapter extends LlmAdapter {
   /** Subagent sessions this process continued through their parent, by parent id, so the parent's
    *  own restart notice can name them and the parent does not hand them the work again. */
   readonly continuedChildren = new Map<string, Set<string>>();
+
   /** What a heal needs from dsh, handed over by the session routes; undefined until they load. */
   heal?: HealHost;
   /** Masks secret env values in tool results; undefined when `redactSecrets` is off. */
@@ -3971,6 +3973,13 @@ export class ClaudeCodeAdapter extends LlmAdapter {
     }
   }
 
+  /** Subagent sessions a wake reached through their parent a moment ago, shared by every adapter
+   *  instance in the process (dsh can mount the plugin twice at boot, and each instance adopts the
+   *  same keeper). The direct wake is deduplicated by the turn it opens at once (`proc.busy`); this
+   *  one resolves the parent and cold-resumes the child first, so two wakes in the same moment would
+   *  both get through without it. */
+  static readonly wokeThroughParent = new Set<string>();
+
   /** Two boots closer than this are a crash loop, not a restart. */
   static readonly BOOT_BACKOFF_MS = 60_000;
 
@@ -7155,10 +7164,40 @@ export class ClaudeCodeAdapter extends LlmAdapter {
     const note = (line: string) =>
       trace(join(this.stateDir, "resume.log"), `wake ${sessionId}: ${line}`);
     const continuation = text === RESTART_TEXT || text === RECONNECT_TEXT || text === RELOAD_TEXT;
+    const waking = ClaudeCodeAdapter.wokeThroughParent;
+    if (waking.has(sessionId)) {
+      await note("a wake through its parent is already on its way");
+      return true;
+    }
     if (continuation && child.noticePending) {
       await note("restart notice already pending, not stacking another");
       return true;
     }
+    // Claimed before the first await: a second wake in the same moment stops at the check above.
+    waking.add(sessionId);
+    const sent = await this.sendThroughParent(sessionId, child.parentId, text, note);
+    if (!sent) {
+      waking.delete(sessionId);
+      return false;
+    }
+    // By now the child's turn has started; a later wake is a new one.
+    setTimeout(() => waking.delete(sessionId), WAKE_THROUGH_PARENT_HOLD_MS).unref?.();
+    if (continuation) {
+      const set = this.continuedChildren.get(child.parentId) ?? new Set<string>();
+      this.continuedChildren.set(child.parentId, set.add(sessionId));
+    }
+    await note(`followup sent through parent ${child.parentId}`);
+    return true;
+  }
+
+  /** Send `text` to a subagent's session as a message from its parent, loading the parent first
+   *  when dsh had dropped it. False, with the reason noted, when it could not be sent. */
+  async sendThroughParent(
+    sessionId: string,
+    parentId: string,
+    text: string,
+    note: (line: string) => Promise<void>,
+  ): Promise<boolean> {
     const subagents = this.ctx?.get?.("subagents");
     if (!subagents) {
       this.unwakeable.add(sessionId);
@@ -7167,36 +7206,31 @@ export class ClaudeCodeAdapter extends LlmAdapter {
     }
     let parent: Agent | undefined;
     try {
-      parent = this.ctx.agents.get(asSessionId(child.parentId));
+      parent = this.ctx.agents.get(asSessionId(parentId));
       if (!parent && this.sessionController)
-        parent = resolvedAgent(await this.sessionController.resolveAgent(child.parentId));
+        parent = resolvedAgent(await this.sessionController.resolveAgent(parentId));
     } catch (error) {
       const reason = errorText(error);
       // The parent is a subagent itself, which only its own parent reaches: one level deeper than
       // this wake goes.
       if (/owned by subagent routing/i.test(reason)) this.unwakeable.add(sessionId);
-      await note(`parent ${child.parentId} unavailable: ${reason}`);
+      await note(`parent ${parentId} unavailable: ${reason}`);
       return false;
     }
     if (!parent) {
-      await note(`no agent for parent ${child.parentId}`);
+      await note(`no agent for parent ${parentId}`);
       return false;
     }
     try {
       await subagents.sendMessage(parent, asSessionId(sessionId), [{ type: "text", text }], {
         signal: AbortSignal.timeout(30_000),
       });
+      return true;
     } catch (error) {
       this.log("warn", `wake through parent failed: ${errorText(error)}`);
-      await note(`message through parent ${child.parentId} failed: ${errorText(error)}`);
+      await note(`message through parent ${parentId} failed: ${errorText(error)}`);
       return false;
     }
-    if (continuation) {
-      const set = this.continuedChildren.get(child.parentId) ?? new Set<string>();
-      this.continuedChildren.set(child.parentId, set.add(sessionId));
-    }
-    await note(`followup sent through parent ${child.parentId}`);
-    return true;
   }
 
   /** Offer a dsh tool call from the MCP bridge to the session's live turn. Undefined when no turn

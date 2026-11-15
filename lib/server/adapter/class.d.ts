@@ -1103,6 +1103,12 @@ export declare class ClaudeCodeAdapter extends LlmAdapter {
     }>;
     /** Register the /btw command that asks Claude a quick side question without interrupting the turn; a no-op once that command is already bridged. */
     registerAsideCommand(commands: NonNullable<PluginContext["commands"]>): void;
+    /** Subagent sessions a wake reached through their parent a moment ago, shared by every adapter
+     *  instance in the process (dsh can mount the plugin twice at boot, and each instance adopts the
+     *  same keeper). The direct wake is deduplicated by the turn it opens at once (`proc.busy`); this
+     *  one resolves the parent and cold-resumes the child first, so two wakes in the same moment would
+     *  both get through without it. */
+    static readonly wokeThroughParent: Set<string>;
     /** Two boots closer than this are a crash loop, not a restart. */
     static readonly BOOT_BACKOFF_MS = 60000;
     /**
@@ -1468,6 +1474,9 @@ export declare class ClaudeCodeAdapter extends LlmAdapter {
         parentId: string;
         noticePending: boolean;
     }, text: string): Promise<boolean>;
+    /** Send `text` to a subagent's session as a message from its parent, loading the parent first
+     *  when dsh had dropped it. False, with the reason noted, when it could not be sent. */
+    sendThroughParent(sessionId: string, parentId: string, text: string, note: (line: string) => Promise<void>): Promise<boolean>;
     /** Offer a dsh tool call from the MCP bridge to the session's live turn. Undefined when no turn
      *  can take it (idle process, a relay already pending); the bridge then executes it directly. */
     relay(sessionId: string, toolName: string, args: Record<string, JsonValue>, signal: AbortSignal, toolUseId?: string): Promise<RelayResult> | undefined;

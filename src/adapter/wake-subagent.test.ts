@@ -76,6 +76,8 @@ function world(
     sessions: { get: () => undefined },
     agents: { get: (id: string) => live.get(id) },
   } as unknown as PluginContext;
+  // The guard against a double wake is process-wide; each block starts clean.
+  ClaudeCodeAdapter.wokeThroughParent.clear();
   const adapter = new ClaudeCodeAdapter(ctx, Config({}));
   adapter.sessionController = {
     resolveAgent: async (id: string) => {
@@ -116,6 +118,18 @@ function world(
   assert.deepEqual(w.resolved, [], "a live parent is used as it is");
   assert.equal(w.sent[0]?.text, WAKE_TEXT);
   assert.equal(w.adapter.continuedChildren.size, 0, "a background-task wake is no continuation");
+}
+
+{
+  // Two wakes in the same moment (an adopted keeper's drain and its idle result) send once, also
+  // while the parent is still being loaded.
+  const w = world();
+  const both = await Promise.all([
+    w.adapter.wake("c1", undefined, WAKE_TEXT),
+    w.adapter.wake("c1", undefined, WAKE_TEXT),
+  ]);
+  assert.deepEqual(both, [true, true]);
+  assert.equal(w.sent.length, 1, "one message through the parent");
 }
 
 {
