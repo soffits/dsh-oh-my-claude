@@ -962,6 +962,8 @@ export declare class ClaudeProcess {
     child: SubprocessHandle;
     key?: string;
     resuming?: boolean;
+    /** Reattached after a restart whose resume another plugin owns: no turn of its own until one opens. */
+    heldForResume?: boolean;
     onIdleResult?(): void;
     /** An interrupt was written and the CLI has not answered it yet. dsh ends the turn's generator
      *  on a user Stop before that answer lands, so the answer reaches an idle process; a stopped

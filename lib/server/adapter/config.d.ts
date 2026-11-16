@@ -69,6 +69,7 @@ export type Config = {
     debug: boolean;
     approvals: boolean;
     processIdleMs: number;
+    resumeAfterRestart: boolean;
     maxProcesses: number;
     providerId: string;
     providerName: string;
@@ -140,6 +141,7 @@ export declare const Config: z<Schemastery.ObjectS<{
     continueAfterLimit: z<boolean, boolean>;
     debug: z<boolean, boolean>;
     approvals: z<boolean, boolean>;
+    resumeAfterRestart: z<boolean, boolean>;
     processIdleMs: z<number, number>;
     maxProcesses: z<number, number>;
     configDir: z<string, string>;
@@ -198,6 +200,7 @@ export declare const Config: z<Schemastery.ObjectS<{
     continueAfterLimit: z<boolean, boolean>;
     debug: z<boolean, boolean>;
     approvals: z<boolean, boolean>;
+    resumeAfterRestart: z<boolean, boolean>;
     processIdleMs: z<number, number>;
     maxProcesses: z<number, number>;
     configDir: z<string, string>;
