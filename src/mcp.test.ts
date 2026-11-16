@@ -635,8 +635,6 @@ console.log("mcp ok");
       },
     },
   } as unknown as Parameters<typeof promptSession>[0];
-  const from =
-    "[Sent by the agent in dsh session s1 through prompt_session, not typed by the user.]";
   // SAFETY: the calling agent's session is s1
   const caller = { id: "a", session: { id: "s1" } } as unknown as Agent;
   const signal = new AbortController().signal;
@@ -646,12 +644,12 @@ console.log("mcp ok");
   );
   assert.deepEqual(
     calls,
-    ["state", `prompt queue ${from}\n\nredo step 2`],
-    "cursor read before the prompt, and the message names its sender",
+    ["state", "prompt queue redo step 2"],
+    "cursor read before the prompt, and the text is the prompt as given",
   );
   calls.length = 0;
   await promptSession(host, caller, { sessionId: "s2", prompt: "hint", mode: "steer" }, signal);
-  assert.deepEqual(calls, ["state", `prompt steer ${from}\n\nhint`]);
+  assert.deepEqual(calls, ["state", "prompt steer hint"]);
   const s1 = { kind: "dsh-session", channel: "dsh", id: "s1" };
   assert.deepEqual(senders, [s1, s1], "recorded as the calling session's, not the owner's");
   calls.length = 0;
