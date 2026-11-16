@@ -112,6 +112,7 @@ export type Config = {
   debug: boolean;
   approvals: boolean;
   processIdleMs: number;
+  resumeAfterRestart: boolean;
   maxProcesses: number;
   providerId: string;
   providerName: string;
@@ -350,6 +351,12 @@ export const Config = z.object({
     .default(true)
     .description(
       "Route Claude Code permission prompts and AskUserQuestion to dsh dialogs (--permission-prompt-tool stdio)",
+    ),
+  resumeAfterRestart: z
+    .boolean()
+    .default(true)
+    .description(
+      "Continue the turns a dsh restart cut off: nudge sessions that were mid-turn and wake reattached Claude processes. Turn it off when another plugin (dsh-restart-resume) continues every cut turn from dsh's session log; this plugin then only reattaches the processes, and the other plugin's notice opens the turn that shows what Claude did meanwhile.",
     ),
   processIdleMs: z
     .number()

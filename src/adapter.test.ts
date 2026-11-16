@@ -6486,6 +6486,42 @@ console.log("interrupt-on-abort ok");
   console.log("reattach wake ok");
 }
 
+// resumeAfterRestart off: another plugin continues what a restart cut off, from dsh's log. A
+// reattached process is left alone, including the reply Claude finished while dsh was down (a cut
+// turn whose tool call died with the old dsh): it opens no turn of its own, which would show the
+// reply and leave the session looking like it moved on. The turn the resumer opens releases it.
+// The boot nudge clears the busy file and sends nothing.
+{
+  const adapter = new ClaudeCodeAdapter(
+    fakeCtx({ on() {} }),
+    Config({ resumeAfterRestart: false }),
+  );
+  const sent: string[] = [];
+  adapter.wake = async (id) => {
+    sent.push(id);
+    return true;
+  };
+  const fake: any = {
+    alive: true,
+    busy: false,
+    onIdleResult: () => void adapter.wake("cut", fake),
+  };
+  adapter.reattachWake(fake, "cut", new Set(["cut"]));
+  ClaudeProcess.prototype.noteIdleResult.call(fake, '{"type":"result","subtype":"success"}');
+  const busy = joinPath(tmpdir(), `omc-resume-off-${process.pid}.json`);
+  await writeFile(busy, JSON.stringify(["cut"]));
+  assert.deepEqual(await adapter.resumeInterrupted(busy), []);
+  assert.deepEqual(JSON.parse(await readFile(busy, "utf8")), [], "the busy file is cleared");
+  await new Promise((r) => setTimeout(r, 2500));
+  assert.deepEqual(sent, [], "nothing is woken or nudged");
+  fake.heldForResume = false; // what opening a turn does
+  ClaudeProcess.prototype.noteIdleResult.call(fake, '{"type":"result","subtype":"success"}');
+  await new Promise((r) => setTimeout(r, 10));
+  assert.deepEqual(sent, ["cut"], "after a turn, an idle result wakes as before");
+  await rm(busy, { force: true });
+  console.log("resume-after-restart off ok");
+}
+
 // wake: a session dsh had to resume gets its `dsh` server reconnected before the notice's turn
 // starts, so the first turn after a restart has dsh's tools; a live agent is not touched.
 {
