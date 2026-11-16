@@ -4863,13 +4863,16 @@ export class ClaudeCodeAdapter extends LlmAdapter {
       proc.kill();
       proc = undefined;
     }
-    // A spawn-mode flip never ends a process that still holds output from the gap: a wake turn, or
-    // any turn with turn frames queued, keeps it, and the session's next turn replaces it. A
-    // respawn here killed an adopted keeper mid-reply and lost what it wrote (#241 review).
+    // A process that still holds output from the gap is not ended for a spec that differs: a wake
+    // turn exists only to show that output, so it keeps the process whatever changed since it was
+    // spawned (after a restart the stored spec rarely equals the new one: an instructions edit
+    // is enough), and the session's next turn replaces it. A spawn-mode flip is kept for any turn
+    // with turn frames queued. A respawn here killed an adopted keeper mid-reply and lost what it
+    // wrote while dsh was away (#241 review; 2026-11-16, a subagent's reply lost the same way).
     const keepForDrain =
       proc?.alive === true &&
-      flipOnly(proc.key, proc.spec?.child, prep.spec) &&
-      (wakeOnlyTurn(options.messages) || proc.hasTurnOutput());
+      (wakeOnlyTurn(options.messages) ||
+        (flipOnly(proc.key, proc.spec?.child, prep.spec) && proc.hasTurnOutput()));
     if (proc?.alive && proc.key !== key && !keepForDrain) await this.retarget(proc, prep.spec);
     if (proc && (!proc.alive || (proc.key !== key && !keepForDrain))) {
       proc.kill();

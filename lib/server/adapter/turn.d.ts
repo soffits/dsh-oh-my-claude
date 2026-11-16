@@ -230,8 +230,10 @@ export declare const WAKE_THROUGH_PARENT_HOLD_MS = 10000;
 export declare const RESUME_DELAY_MS = 10000;
 /** Slack after a usage limit's reset instant before the continue notice goes out. */
 export declare const LIMIT_GRACE_MS = 5000;
-/** A turn opened by our own wake notice, with no user prompt to send: only drain what Claude
- *  already wrote. A user prompt in the same batch takes precedence and is sent normally. */
+/** A turn opened by our own wake notice, with no prompt to send: only drain what Claude already
+ *  wrote. A prompt in the same batch takes precedence and is sent normally; a wake notice an
+ *  earlier drain turn left behind (it drew nothing, so no assistant message follows it) must not
+ *  swallow the next message. */
 export declare function wakeOnlyTurn(messages: LooseMessage[] | undefined): boolean;
 /** Drop messages Claude already received live on stdin (matched by `steerKey`). */
 export declare function dropSent<T extends LooseMessage>(messages: T[] | undefined, sent: Set<string> | undefined): T[];

@@ -2636,6 +2636,31 @@ console.log("ok");
   assert.equal(wakeOnlyTurn([user, asst, wakeV4]), true, "the v4 producer kind is our notice too");
 }
 {
+  // A subagent's session gets its real input from its parent as `agent-message`s. A wake notice an
+  // earlier drain turn left behind (it drew nothing, so no assistant message follows it) sits in
+  // the same batch as the parent's next message, which must be sent, not swallowed by the drain.
+  const fromParent = (text: string) =>
+    message({
+      role: "user",
+      source: { kind: "agent-message", form: "relay" },
+      content: [
+        { type: "text", text: "Agent p1 sent a message: " },
+        { type: "text", text },
+      ],
+    });
+  const asst = message({ role: "assistant", content: [{ type: "text", text: "ok" }] });
+  assert.equal(
+    wakeOnlyTurn([asst, fromParent(WAKE_TEXT)]),
+    true,
+    "the relayed notice alone drains",
+  );
+  assert.equal(
+    wakeOnlyTurn([asst, fromParent(WAKE_TEXT), fromParent("continue the task")]),
+    false,
+    "a real message from the parent after a stale notice is a prompt",
+  );
+}
+{
   // Claude Code's own compaction shows as one line; other system events stay silent.
   const t = new Translator() as any;
   assert.deepEqual(t.translate({ type: "system", subtype: "init", session_id: "x" }), []);
@@ -4462,6 +4487,63 @@ console.log("schema-guard ok");
   );
   assert.equal(killed, 0, "the running turn's process is left alone");
   assert.equal(a.processes.get(registryKey("claude-code", "s1")), running);
+}
+// acquire(): a wake turn exists to show what an adopted process wrote while dsh was away, so it
+// keeps that process whatever differs between its stored spec and the new one (an edited
+// instructions file after a restart is enough). A prompt turn still replaces it.
+{
+  const old = { ...emptySpec, system: "old" };
+  const wake = message({
+    role: "user",
+    source: { kind: "plugin:dsh-oh-my-claude", form: "notice", summary: WAKE_TEXT },
+    content: [{ type: "text", text: WAKE_TEXT }],
+  });
+  const prompt = message({
+    role: "user",
+    source: { kind: "user" },
+    content: [{ type: "text", text: "hi" }],
+  });
+  const setup = () => {
+    const a = new ClaudeCodeAdapter(fakeCtx({ on() {} }), Config({}));
+    let killed = 0;
+    const held = fakeProc({
+      alive: true,
+      busy: false,
+      key: JSON.stringify(old),
+      spec: old,
+      hasTurnOutput: () => true,
+      kill: () => {
+        killed += 1;
+      },
+    });
+    a.processes.set(registryKey("claude-code", "s1"), held);
+    // SAFETY: acquire only reads what prepare returns; the spawn path is never reached here.
+    a.prepare = async () =>
+      ({
+        input: "{}",
+        args: [],
+        cwd: "/tmp",
+        spec: { ...emptySpec, system: "new" },
+      }) as unknown as TurnPrep;
+    a.evict = () => {
+      throw new Error("respawn");
+    };
+    // SAFETY: acquire reads sessionId and messages only
+    const options = (messages: LooseMessage[]) =>
+      ({ sessionId: "s1", messages }) as unknown as Parameters<ClaudeCodeAdapter["acquire"]>[0];
+    return { a, held, options, killedCount: () => killed };
+  };
+  {
+    const { a, held, options, killedCount } = setup();
+    const got = await a.acquire(options([wake]));
+    assert.equal(got.proc, held, "the wake turn keeps the process that holds the output");
+    assert.equal(killedCount(), 0);
+  }
+  {
+    const { a, options, killedCount } = setup();
+    await assert.rejects(async () => a.acquire(options([prompt])), /respawn/);
+    assert.equal(killedCount(), 1, "a prompt turn replaces a process whose spec changed");
+  }
 }
 // --- native tool rows: onToolCall / onToolResult callbacks fire for Bash and Edit ---
 {
