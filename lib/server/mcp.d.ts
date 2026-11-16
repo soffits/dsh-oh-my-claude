@@ -44,13 +44,25 @@ type PromptHost = Pick<OpenHost, "sessionController"> & Pick<PluginContext, "llm
  * so an effort the model lacks shows up in the new session's first turn, like an unknown model.
  */
 export declare function openSession(ctx: OpenHost, agent: Agent, args: OpenSessionArgs, signal: AbortSignal): Promise<string>;
+/** The caller behind a message open_session or prompt_session sends, in dsh's field for it,
+ *  `source.principal`. dsh's session controller fills that field only for remote callers and
+ *  leaves it empty for the owner, so a prompt the bridge hands it in-process would be recorded
+ *  as the owner's own typing: shown as their bubble, mirrored to their chats and counted as their
+ *  words by anything reading the log. The shape is the one other sender-recording plugins use
+ *  for a dsh session (`kind`, `channel`, `id`). */
+export declare const callerPrincipal: (agent: Agent) => {
+    kind: "dsh-session";
+    channel: "dsh";
+    id: string;
+};
 /**
- * Sends a follow-up into an existing session (#255, from huananhuxu-debug's patch), under a line
- * naming the calling session as its sender. The cursor is read before the prompt, so replies past
- * it are this message's, plus any the session's running turn finishes meanwhile; reading it does
- * not wake a cold session, and an unknown id fails there with dsh's own "not found". dsh's `prompt`
- * resolves the session itself, so a cold one resumes only for a message that is really sent, and
- * keeps its route unless the call names one, which `switchRoute` sets first.
+ * Sends a follow-up into an existing session (#255, from huananhuxu-debug's patch), recorded as
+ * the calling session's (`callerPrincipal`) and under a line naming it for the model. The cursor is
+ * read before the prompt, so replies past it are this message's, plus any the session's running
+ * turn finishes meanwhile; reading it does not wake a cold session, and an unknown id fails there
+ * with dsh's own "not found". The session is resolved only to deliver, so a cold one resumes only
+ * for a message that is really sent, and keeps its route unless the call names one, which
+ * `switchRoute` sets first.
  */
 export declare function promptSession(ctx: PromptHost, agent: Agent, args: Record<string, JsonValue>, signal: AbortSignal): Promise<string>;
 /**

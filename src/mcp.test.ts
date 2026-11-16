@@ -442,8 +442,10 @@ console.log("mcp ok");
 {
   const calls: string[] = [];
   const selected: unknown[] = [];
+  const sent: Array<{ content: unknown; source: unknown }> = [];
   const child = {
     model: { select: (r: unknown) => void (calls.push("select"), selected.push(r)) },
+    followup: (m: { content: unknown; source: unknown }) => void (calls.push("prompt"), sent.push(m)),
   };
   // SAFETY: a stand-in for the three host services openSession reads; there is no selectModel,
   // since that one would also save the pick as the box's default for new sessions
@@ -456,7 +458,6 @@ console.log("mcp ok");
     sessionController: {
       create: async () => (calls.push("create"), { sessionId: "n1" }),
       resolveAgent: async () => ({ agent: child }),
-      prompt: async () => void calls.push("prompt"),
     },
   } as unknown as Parameters<typeof openSession>[0];
   // SAFETY: an agent whose session header names the workspace path
@@ -471,6 +472,12 @@ console.log("mcp ok");
   assert.equal(text, "opened session n1 in workspace w1");
   assert.deepEqual(calls, ["create", "select", "prompt"], "route set before the first prompt");
   assert.deepEqual(selected, [{ provider: "claude-code", model: "claude-haiku-5-5" }]);
+  // The brief is recorded as the calling session's, never as the owner's own typing.
+  assert.deepEqual(sent[0]?.content, [{ type: "text", text: "go" }]);
+  const opened = sent[0]?.source as { kind: string; rpcId: string; principal: unknown };
+  assert.equal(opened.kind, "user");
+  assert.equal(typeof opened.rpcId, "string");
+  assert.deepEqual(opened.principal, { kind: "dsh-session", channel: "dsh", id: "s" });
   // A reasoning effort rides on the route (#250); without a route it is dropped with it.
   selected.length = 0;
   calls.length = 0;
@@ -577,6 +584,9 @@ console.log("mcp ok");
 
   const calls: string[] = [];
   let waited: unknown;
+  /** A message the bridge put into an inbox. */
+  type Delivered = { content: Array<{ text: string }>; source: { principal?: unknown } };
+  const senders: unknown[] = [];
   /** One assistant message record as dsh's wait returns it. */
   const record = (seq: number, content: unknown[]) => ({
     event: { type: "assistant/message", seq, data: { message: { content } } },
@@ -605,8 +615,16 @@ console.log("mcp ok");
         calls.push("state");
         return { cursor: 41 };
       },
-      prompt: async (r: { mode: string; content: Array<{ text: string }> }) =>
-        void calls.push(`prompt ${r.mode} ${r.content[0]?.text}`),
+      // The bridge resolves the session only to deliver; a queued message is a followup, a
+      // steered one a steer, each with the caller on its source.
+      resolveAgent: async () => ({
+        agent: {
+          followup: (m: Delivered) =>
+            void (calls.push(`prompt queue ${m.content[0]?.text}`), senders.push(m.source.principal)),
+          steer: (m: Delivered) =>
+            void (calls.push(`prompt steer ${m.content[0]?.text}`), senders.push(m.source.principal)),
+        },
+      }),
       wait: async (r: unknown) => {
         waited = r;
         return {
@@ -634,6 +652,8 @@ console.log("mcp ok");
   calls.length = 0;
   await promptSession(host, caller, { sessionId: "s2", prompt: "hint", mode: "steer" }, signal);
   assert.deepEqual(calls, ["state", `prompt steer ${from}\n\nhint`]);
+  const s1 = { kind: "dsh-session", channel: "dsh", id: "s1" };
+  assert.deepEqual(senders, [s1, s1], "recorded as the calling session's, not the owner's");
   calls.length = 0;
   await assert.rejects(
     promptSession(host, caller, { sessionId: "s1", prompt: "x" }, signal),
@@ -790,13 +810,13 @@ console.log("mcp ok");
       select: (r: Route) => void (calls.push("select"), selected.push(r), (current = r)),
       current: () => current,
     },
+    followup: () => void calls.push("prompt"),
   };
   // SAFETY: a stand-in for the controller and llm methods prompt_session reads
   const host = {
     sessionController: {
       state: async () => (calls.push("state"), { cursor: 41 }),
       resolveAgent: async () => (calls.push("resolve"), { agent: target }),
-      prompt: async () => void calls.push("prompt"),
     },
     llm: {
       listProviders: () => [{ id: "openai-codex" }, { id: "claude-code" }],
@@ -833,7 +853,7 @@ console.log("mcp ok");
   );
   assert.deepEqual(
     calls,
-    ["state", "resolve", "select", "prompt"],
+    ["state", "resolve", "select", "resolve", "prompt"],
     "cursor first, then the agent, route before the message",
   );
   assert.equal(

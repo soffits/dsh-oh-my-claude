@@ -12,6 +12,7 @@ Versions from 1.0.0 up are on npm. Everything below 1.0.0 was released from the 
 
 ### Fixed
 
+- `open_session` and `prompt_session` messages were recorded as the owner's own typing: dsh writes a prompt's sender only for remote callers, so a brief or follow-up one agent sent another showed as the owner's message in the chat, in mirrors to other chats and in anything reading the session log. Each one now carries the calling session as its sender (`source.principal`, kind `dsh-session`).
 - A subagent's messages from its parent were swallowed after a blank turn. Its real messages arrive as agent messages, and the check for a turn opened only by the plugin's own background-task notice counted just a person's prompt as real input, so a notice an earlier blank turn left behind made every later message a drain-only turn that ended at once with nothing. A message from the parent now counts as a prompt.
 - A restart no longer throws away what a reattached Claude wrote while dsh was away when anything in its start settings had changed (an instructions file edit is enough). The turn that exists to show that output replaced the process first, so the reply was lost and the turn came out blank; it now keeps the process and the next prompt replaces it.
 - `open_session` called without a prompt now fails before creating anything. It used to open a new session whose first message was the text "undefined".
