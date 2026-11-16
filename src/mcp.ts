@@ -35,6 +35,7 @@ import type {
   WebServer,
 } from "./dsh.js";
 import { asSessionId } from "./dsh.js";
+import { createUserMessage, type MessageSource } from "@deepseek-ai/dsh-llm";
 import { resolvedAgent } from "./adapter/turn.js";
 import { PLAN_REFUSAL, planRefuses } from "./plan-gate.js";
 
@@ -310,17 +311,8 @@ export async function openSession(
       throw e;
     }
   }
-  await ctx.sessionController.prompt(
-    {
-      sessionId,
-      requestId: randomUUID(),
-      // Required from dsh 0.1.7: a prompt says whether it queues behind the running turn or
-      // steers into it. A fresh child session has no turn to steer, so it queues.
-      mode: "queue",
-      content: [{ type: "text", text: prompt }],
-    },
-    signal,
-  );
+  // A fresh session has no turn to steer, so the first prompt queues.
+  await deliver(ctx, agent, sessionId, prompt, "queue", signal);
   return `opened session ${sessionId}${workspaceId ? ` in workspace ${workspaceId}` : ` at ${cwd}`}`;
 }
 
@@ -334,12 +326,50 @@ function targetOf(agent: Agent, args: Record<string, JsonValue>, tool: string): 
   return asSessionId(id);
 }
 
-/** The line prompt_session puts above a message. dsh records the message as a plain user message
- *  with nothing to say who sent it, so without this line the target session, and the owner reading
- *  its transcript, could not tell it from the owner's own typing. The model reads it, so it is not
- *  translated. */
+/** The line prompt_session puts above a message, for the target session's model, which never
+ *  sees a message's source. It is not translated. */
 const senderLine = (agent: Agent): string =>
   `[Sent by the agent in dsh session ${agent.session?.id ?? "unknown"} through prompt_session, not typed by the user.]`;
+
+/** The caller behind a message open_session or prompt_session sends, in dsh's field for it,
+ *  `source.principal`. dsh's session controller fills that field only for remote callers and
+ *  leaves it empty for the owner, so a prompt the bridge hands it in-process would be recorded
+ *  as the owner's own typing: shown as their bubble, mirrored to their chats and counted as their
+ *  words by anything reading the log. The shape is the one other sender-recording plugins use
+ *  for a dsh session (`kind`, `channel`, `id`). */
+export const callerPrincipal = (agent: Agent) => ({
+  kind: "dsh-session" as const,
+  channel: "dsh" as const,
+  id: agent.session?.id ?? String(agent.id),
+});
+
+/** Puts a text message from `caller` into a session's inbox: queued behind its running turn, or
+ *  steered into it. The bridge builds the message itself instead of going through the
+ *  controller's `prompt`, so the caller is on the message from the moment it is admitted, where
+ *  plugins that show queued messages read it, and in the session log. For a text prompt the
+ *  controller does the same two steps: resolve the agent (resuming a cold session), then
+ *  `followup` or `steer`. */
+async function deliver(
+  ctx: Pick<OpenHost, "sessionController">,
+  caller: Agent,
+  sessionId: SessionId,
+  text: string,
+  mode: "queue" | "steer",
+  signal: AbortSignal,
+): Promise<void> {
+  const target = resolvedAgent(await ctx.sessionController.resolveAgent(sessionId));
+  signal.throwIfAborted();
+  // SAFETY: dsh-llm's MessageSource map has no entry for the principal the session controller
+  // declares on its `user` source; the shape is the controller's own.
+  const source = {
+    kind: "user",
+    rpcId: randomUUID(),
+    principal: callerPrincipal(caller),
+  } as MessageSource;
+  const message = createUserMessage({ content: [{ type: "text", text }], source });
+  if (mode === "steer" && target.steer) target.steer(message);
+  else target.followup(message);
+}
 
 /**
  * Switches the target session to the route prompt_session's optional `provider`, `model` and
@@ -406,12 +436,13 @@ async function switchRoute(
 }
 
 /**
- * Sends a follow-up into an existing session (#255, from huananhuxu-debug's patch), under a line
- * naming the calling session as its sender. The cursor is read before the prompt, so replies past
- * it are this message's, plus any the session's running turn finishes meanwhile; reading it does
- * not wake a cold session, and an unknown id fails there with dsh's own "not found". dsh's `prompt`
- * resolves the session itself, so a cold one resumes only for a message that is really sent, and
- * keeps its route unless the call names one, which `switchRoute` sets first.
+ * Sends a follow-up into an existing session (#255, from huananhuxu-debug's patch), recorded as
+ * the calling session's (`callerPrincipal`) and under a line naming it for the model. The cursor is
+ * read before the prompt, so replies past it are this message's, plus any the session's running
+ * turn finishes meanwhile; reading it does not wake a cold session, and an unknown id fails there
+ * with dsh's own "not found". The session is resolved only to deliver, so a cold one resumes only
+ * for a message that is really sent, and keeps its route unless the call names one, which
+ * `switchRoute` sets first.
  */
 export async function promptSession(
   ctx: PromptHost,
@@ -425,15 +456,7 @@ export async function promptSession(
   const mode = str(args.mode) === "steer" ? "steer" : "queue";
   const { cursor } = await ctx.sessionController.state({ sessionId }, signal);
   const route = await switchRoute(ctx, sessionId, args, signal);
-  await ctx.sessionController.prompt(
-    {
-      sessionId,
-      requestId: randomUUID(),
-      mode,
-      content: [{ type: "text", text: `${senderLine(agent)}\n\n${prompt}` }],
-    },
-    signal,
-  );
+  await deliver(ctx, agent, sessionId, `${senderLine(agent)}\n\n${prompt}`, mode, signal);
   const on = route
     ? ` on ${route.provider}/${route.model}${route.reasoningEffort ? ` at ${route.reasoningEffort} effort` : ""}`
     : "";
