@@ -6367,6 +6367,39 @@ console.log("interrupt-on-abort ok");
   console.log("drain-adopted ok");
 }
 
+// reattachWake: after a restart only a session whose turn was running when dsh went down is woken
+// with the reconnect notice. One whose last turn ended by a Stop or abort, or that was idle, stays
+// idle even with a finished background job queued in its process; nothing starts a turn for it.
+{
+  const adapter = new ClaudeCodeAdapter(fakeCtx({ on() {} }), Config({}));
+  const sent: Array<[string, string | undefined]> = [];
+  adapter.wake = async (id, _proc, text) => {
+    sent.push([id, text]);
+    return true;
+  };
+  const queued = () => {
+    const proc: any = { alive: true, busy: false, queue: new LineQueue() };
+    proc.hasTurnOutput = ClaudeProcess.prototype.hasTurnOutput;
+    proc.queue.push(
+      JSON.stringify({ type: "system", subtype: "task_notification", status: "completed" }),
+    );
+    return proc;
+  };
+  adapter.reattachWake(queued(), "stopped", new Set(["running"]));
+  adapter.reattachWake(queued(), "running", new Set(["running"]));
+  await new Promise((r) => setTimeout(r, 2500));
+  assert.deepEqual(
+    sent.filter(([id]) => id === "stopped"),
+    [],
+    "a session whose turn had ended is not woken",
+  );
+  assert.ok(
+    sent.some(([id, text]) => id === "running" && text === RECONNECT_TEXT),
+    "a turn that was running at shutdown still gets the reconnect notice",
+  );
+  console.log("reattach wake ok");
+}
+
 // wake: a session dsh had to resume gets its `dsh` server reconnected before the notice's turn
 // starts, so the first turn after a restart has dsh's tools; a live agent is not touched.
 {
