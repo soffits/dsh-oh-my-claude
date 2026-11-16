@@ -8,6 +8,7 @@ Versions from 1.0.0 up are on npm. Everything below 1.0.0 was released from the 
 
 ### Added
 
+- A user message another dsh session sent (`open_session`, `prompt_session`) shows "Sent by session …" above its bubble, so it no longer looks like something the owner typed.
 - `deferTools`: with `toolLoading: dsh`, the bridged tools to leave behind Claude Code's `ToolSearch` although dsh loads them up front. A home with many tools it rarely calls (a Home Assistant server, a scheduler, plugin and session tools) no longer sends their schemas with every request; a model loads one by name when it needs it. Names take `*` as a wildcard and a leading `!` takes names back out, so `["*", "!bash", "!read"]` defers all but those two. A change starts a new Claude process on the session's next turn.
 
 ### Fixed

@@ -768,6 +768,19 @@ export function useNarrow(): boolean {
   return narrow;
 }
 
+/** The row `conversation.chat.user.before` hands a selector: the row kind and its durable message
+ *  source, read only for the sender a plugin recorded (`principal`). Session logs are persisted
+ *  data, so the fields are only as typed as whoever wrote them. */
+export interface ChainOwner {
+  readonly kind: string;
+  readonly source?: { readonly principal?: { readonly kind?: string; readonly id?: string } };
+}
+
+/** What this bundle's chain selector elects: the dsh session that sent a message. */
+export interface ChainMatch {
+  readonly sessionId: string;
+}
+
 type DshSlots = {
   // The factory's disposer, when it returns one, runs when the slot's declaration goes away.
   inject: (slot: string, factory: () => ReactNode | (() => void)) => void;
@@ -786,6 +799,9 @@ type DshSlots = {
       // one cell throws, which is why every such registration is wrapped in try/catch below.
       priority?: number;
       inject?: () => Record<string, never>;
+      /** A chain slot's selector (`conversation.chat.user.before`): the first entry answering
+       *  non-null renders, with the answer as `matched`. */
+      select?: (owner: ChainOwner) => ChainMatch | null;
     },
     // `sessionId` on session-scoped slots; `close` on `settings.section` (dsh-client-ui-settings-general
     // passes it so a section can dismiss the settings panel, e.g. after opening a restored session).
@@ -816,6 +832,8 @@ type DshSlots = {
       ) => T;
       /** The entry's `locale` dictionary. */
       t?: (key: string) => string;
+      /** What the entry's `select` answered, on a chain slot. */
+      matched?: ChainMatch;
       // The composer's published state, read through dsh's snapshot-selector hook; `draft` is the
       // text in the box right now, `phase` whether a send holds the editor, `attachmentIds` the draft
       // attachments on the row, in row order.

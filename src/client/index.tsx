@@ -31,6 +31,7 @@ import { PluginUpdateBadge } from "./update-pill.js";
 import { ReportBlock } from "./report.js";
 import { ChangelogBlock } from "./changelog.js";
 import { Spark } from "./spark.js";
+import { AgentSenderLine, agentSender } from "./sender-origin.js";
 import { AccessShield, AccessTrigger, OhMyClaudeControl } from "./panel.js";
 import { AddWorkflow, AddWorkspaceFlow, BOXES_EVENT } from "./picker.js";
 
@@ -421,6 +422,19 @@ export function apply(ctx: ClientCtx) {
     ctx.slots.register(
       { name: "settings.action", id: "claude-nav-icon", order: 99, inject: () => ({}) },
       SectionNavIcon,
+    );
+    return null;
+  });
+
+  // Whose a user message is when another dsh session sent it (open_session, prompt_session).
+  ctx.slots.inject("conversation.chat.user.before", () => {
+    ctx.slots.register(
+      {
+        name: "conversation.chat.user.before",
+        id: "claude-agent-sender",
+        select: agentSender,
+      },
+      AgentSenderLine,
     );
     return null;
   });
