@@ -54,12 +54,13 @@ export declare const ISOLATED_ENV: {
 };
 /**
  * A short digest of the config that decides how Claude Code is started past what the process spec
- * already names: the built-in tools, the tool loading, the isolation and the thinking display. Undefined while all
+ * already names: the built-in tools, the tool loading and its deferrals, the isolation and the thinking display. Undefined while all
  * are at their defaults, so a spec on a default config keys exactly as it did before they existed.
  */
 export declare function engineDigest(config: {
     builtinTools: readonly string[];
     toolLoading: string;
+    deferTools?: readonly string[];
     isolate: boolean;
     thinkingDisplay?: string;
 }): string | undefined;

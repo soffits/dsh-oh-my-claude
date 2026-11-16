@@ -6,6 +6,10 @@ Versions from 1.0.0 up are on npm. Everything below 1.0.0 was released from the 
 
 ## [Unreleased]
 
+### Added
+
+- `deferTools`: with `toolLoading: dsh`, the bridged tools to leave behind Claude Code's `ToolSearch` although dsh loads them up front. A home with many tools it rarely calls (a Home Assistant server, a scheduler, plugin and session tools) no longer sends their schemas with every request; a model loads one by name when it needs it. Names take `*` as a wildcard and a leading `!` takes names back out, so `["*", "!bash", "!read"]` defers all but those two. A change starts a new Claude process on the session's next turn.
+
 ### Fixed
 
 - A subagent's messages from its parent were swallowed after a blank turn. Its real messages arrive as agent messages, and the check for a turn opened only by the plugin's own background-task notice counted just a person's prompt as real input, so a notice an earlier blank turn left behind made every later message a drain-only turn that ended at once with nothing. A message from the parent now counts as a prompt.

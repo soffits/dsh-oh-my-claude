@@ -38,6 +38,7 @@ export type Config = {
     disallowedTools: string[];
     builtinTools: string[];
     toolLoading: "claude" | "dsh";
+    deferTools: string[];
     followToolSet: boolean;
     addDirs: string[];
     pluginDirs: string[];
@@ -108,6 +109,7 @@ export declare const Config: z<Schemastery.ObjectS<{
     disallowedTools: z<string[], string[]>;
     builtinTools: z<string[], string[]>;
     toolLoading: z<"claude" | "dsh", "claude" | "dsh">;
+    deferTools: z<string[], string[]>;
     followToolSet: z<boolean, boolean>;
     addDirs: z<string[], string[]>;
     pluginDirs: z<string[], string[]>;
@@ -165,6 +167,7 @@ export declare const Config: z<Schemastery.ObjectS<{
     disallowedTools: z<string[], string[]>;
     builtinTools: z<string[], string[]>;
     toolLoading: z<"claude" | "dsh", "claude" | "dsh">;
+    deferTools: z<string[], string[]>;
     followToolSet: z<boolean, boolean>;
     addDirs: z<string[], string[]>;
     pluginDirs: z<string[], string[]>;

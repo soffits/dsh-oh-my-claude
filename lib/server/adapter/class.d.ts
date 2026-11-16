@@ -511,6 +511,7 @@ export declare class ClaudeCodeAdapter extends LlmAdapter {
         disallowedTools: import("@deepseek-ai/schemastery").default<string[], string[]>;
         builtinTools: import("@deepseek-ai/schemastery").default<string[], string[]>;
         toolLoading: import("@deepseek-ai/schemastery").default<"claude" | "dsh", "claude" | "dsh">;
+        deferTools: import("@deepseek-ai/schemastery").default<string[], string[]>;
         followToolSet: import("@deepseek-ai/schemastery").default<boolean, boolean>;
         addDirs: import("@deepseek-ai/schemastery").default<string[], string[]>;
         pluginDirs: import("@deepseek-ai/schemastery").default<string[], string[]>;
