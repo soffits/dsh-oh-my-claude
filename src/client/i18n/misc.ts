@@ -2,7 +2,6 @@
 
 /** English. */
 export const en = {
-  "sender.agentSession": "Sent by session {id}",
   "update.available": "{latest} available",
   "update.commandCopied": "Command copied",
   "update.needsDsh": "{latest} needs dsh {floor}",
@@ -58,7 +57,6 @@ export const en = {
 
 /** Chinese, one per English key. */
 export const zh = {
-  "sender.agentSession": "由会话 {id} 发送",
   "update.available": "{latest} 可更新",
   "update.commandCopied": "命令已复制",
   "update.needsDsh": "{latest} 需要 dsh {floor}",
