@@ -135,6 +135,7 @@ import {
   loadTurnRecords,
   saveLimitWait,
   markBusy,
+  peekInterrupted,
   modesUpTo,
   noteBoot,
   PERMISSION_MODES,
@@ -4307,6 +4308,7 @@ export class ClaudeCodeAdapter extends LlmAdapter {
     // In every mode, not only keeper: a hold left from before the switch went off still runs on its
     // box, and adopting it lets its next turn respawn it as a child and the idle reaper end it.
     const all = await loadHolds(this.stateDir);
+    const interrupted = new Set(await peekInterrupted(join(this.stateDir, "busy.json")));
     for (const [sessionId, raw] of Object.entries(all)) {
       const record = asHoldRecord(raw);
       if (!record || record.sessionId !== sessionId) {
@@ -4351,7 +4353,7 @@ export class ClaudeCodeAdapter extends LlmAdapter {
         `adopted hold ${record.name} for ${sessionId} on ${record.host} (offset ${record.offset})`,
       );
       setTimeout(() => void this.reconnectBridge(proc, sessionId), 1500).unref();
-      void this.drainAdopted(proc, sessionId);
+      this.reattachWake(proc, sessionId, interrupted);
     }
   }
 
@@ -4365,6 +4367,7 @@ export class ClaudeCodeAdapter extends LlmAdapter {
    */
   async adoptKeepers(only?: Set<string>): Promise<Set<string>> {
     const left = new Set<string>();
+    const interrupted = new Set(await peekInterrupted(join(this.stateDir, "busy.json")));
     // In every mode, not only keeper: a keeper left from before the switch went off is still running
     // Claude, and adopting it lets its next turn respawn it as a child (the spec key differs) and the
     // idle reaper end it. Returning early here, as this did, left it running with nobody attached.
@@ -4519,7 +4522,7 @@ export class ClaudeCodeAdapter extends LlmAdapter {
       // The first look at 1.5 s found dsh's agent scope still inactive (2026-09-05 23:53: the
       // reply Claude wrote during the restart sat in the queue until the next typed prompt), so
       // keep looking for a minute and stop at the first wake that opened a turn.
-      void this.drainAdopted(proc, spec.sessionId);
+      this.reattachWake(proc, spec.sessionId, interrupted);
     }
     if (!only && left.size > 0) void this.readoptLeft(left);
     return left;
@@ -4536,6 +4539,23 @@ export class ClaudeCodeAdapter extends LlmAdapter {
       if (!this.scopeActive()) return;
       pending = await this.adoptKeepers(pending);
     }
+  }
+
+  /** After a boot reattach: look for output to wake with only when the session's turn was running
+   *  when the last dsh went down (its busy mark is still set). A turn that ended before, by a Stop,
+   *  an abort or on its own, leaves the session idle: the process stays attached and anything it
+   *  queued is read by the next turn someone starts, as for any idle session. A wake here would
+   *  open a turn nobody asked for (2026-11-16: a subagent its parent had interrupted resumed its
+   *  cancelled task). `interrupted` is read before the boot resume clears the file. */
+  reattachWake(proc: ClaudeProcess, sessionId: string, interrupted: ReadonlySet<string>): void {
+    if (interrupted.has(sessionId)) {
+      void this.drainAdopted(proc, sessionId);
+      return;
+    }
+    void trace(
+      join(this.stateDir, "resume.log"),
+      `reattached ${sessionId}: no turn was running at shutdown, left idle`,
+    );
   }
 
   /** Every 2 s for a minute: a reply waiting in an adopted process's queue opens a dsh turn, and the
