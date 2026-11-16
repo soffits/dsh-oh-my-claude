@@ -57,7 +57,8 @@ export declare const callerPrincipal: (agent: Agent) => {
 };
 /**
  * Sends a follow-up into an existing session (#255, from huananhuxu-debug's patch), recorded as
- * the calling session's (`callerPrincipal`) and under a line naming it for the model. The cursor is
+ * the calling session's (`callerPrincipal`); its text is the prompt as given, and a renderer such as
+ * dsh-message-context shows the model who sent it. The cursor is
  * read before the prompt, so replies past it are this message's, plus any the session's running
  * turn finishes meanwhile; reading it does not wake a cold session, and an unknown id fails there
  * with dsh's own "not found". The session is resolved only to deliver, so a cold one resumes only

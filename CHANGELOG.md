@@ -6,6 +6,10 @@ Versions from 1.0.0 up are on npm. Everything below 1.0.0 was released from the 
 
 ## [Unreleased]
 
+### Changed
+
+- `prompt_session` no longer writes a "[Sent by the agent in dsh session …]" line into the message. The sender is on `source.principal` (kind `dsh-session`), and a renderer such as [dsh-message-context](https://github.com/soffits/dsh-message-context) shows it to the model, the same way as for chat channels.
+
 ### Added
 
 - `resumeAfterRestart` (default on): turn it off when another plugin, such as [dsh-restart-resume](https://github.com/soffits/dsh-restart-resume), continues every turn a dsh restart cut off. The plugin then only reattaches the Claude processes: no busy-file nudges, no reconnect wakes, and a reply Claude finished while dsh was down waits for the turn that plugin opens instead of opening one of its own. The busy file is set per model stream, so a turn cut while dsh was running one of its tools was never nudged; dsh's own log sees that cut.

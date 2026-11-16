@@ -542,6 +542,7 @@ export declare class ClaudeCodeAdapter extends LlmAdapter {
         continueAfterLimit: import("@deepseek-ai/schemastery").default<boolean, boolean>;
         debug: import("@deepseek-ai/schemastery").default<boolean, boolean>;
         approvals: import("@deepseek-ai/schemastery").default<boolean, boolean>;
+        resumeAfterRestart: import("@deepseek-ai/schemastery").default<boolean, boolean>;
         processIdleMs: import("@deepseek-ai/schemastery").default<number, number>;
         maxProcesses: import("@deepseek-ai/schemastery").default<number, number>;
         configDir: import("@deepseek-ai/schemastery").default<string, string>;

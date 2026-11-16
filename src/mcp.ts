@@ -166,7 +166,7 @@ const OPEN_SESSION: ToolSchema = {
 const PROMPT_SESSION: ToolSchema = {
   name: "prompt_session",
   description:
-    "Send a follow-up message into an existing dsh session, e.g. one open_session returned. A cold session resumes and keeps its own context. mode queue (default) runs it after the current turn; steer injects it into the running turn. provider, model and reasoningEffort are optional and switch that session's model before the message is sent, for that session only. The switch applies from the session's next step, so a turn it is already running continues on the new model, and the session stays on it until switched again. A model without a provider keeps the session's provider; reasoningEffort alone keeps its model; a different model without reasoningEffort runs at that model's default effort, while the same model keeps its effort. Switching to a provider or model dsh does not list, or to an effort the model does not take, is refused and nothing is sent; a session already on an unlisted model keeps it. Without the three the session keeps its own model. The message arrives under a line naming this session as its sender. Returns at once with a cursor, and the model when one was set: pass the cursor to wait_session as afterSeq to read only the replies that come after this message.",
+    "Send a follow-up message into an existing dsh session, e.g. one open_session returned. A cold session resumes and keeps its own context. mode queue (default) runs it after the current turn; steer injects it into the running turn. provider, model and reasoningEffort are optional and switch that session's model before the message is sent, for that session only. The switch applies from the session's next step, so a turn it is already running continues on the new model, and the session stays on it until switched again. A model without a provider keeps the session's provider; reasoningEffort alone keeps its model; a different model without reasoningEffort runs at that model's default effort, while the same model keeps its effort. Switching to a provider or model dsh does not list, or to an effort the model does not take, is refused and nothing is sent; a session already on an unlisted model keeps it. Without the three the session keeps its own model. The message records this session as its sender (source.principal). Returns at once with a cursor, and the model when one was set: pass the cursor to wait_session as afterSeq to read only the replies that come after this message.",
   parameters: {
     type: "object",
     properties: {
@@ -326,11 +326,6 @@ function targetOf(agent: Agent, args: Record<string, JsonValue>, tool: string): 
   return asSessionId(id);
 }
 
-/** The line prompt_session puts above a message, for the target session's model, which never
- *  sees a message's source. It is not translated. */
-const senderLine = (agent: Agent): string =>
-  `[Sent by the agent in dsh session ${agent.session?.id ?? "unknown"} through prompt_session, not typed by the user.]`;
-
 /** The caller behind a message open_session or prompt_session sends, in dsh's field for it,
  *  `source.principal`. dsh's session controller fills that field only for remote callers and
  *  leaves it empty for the owner, so a prompt the bridge hands it in-process would be recorded
@@ -437,7 +432,8 @@ async function switchRoute(
 
 /**
  * Sends a follow-up into an existing session (#255, from huananhuxu-debug's patch), recorded as
- * the calling session's (`callerPrincipal`) and under a line naming it for the model. The cursor is
+ * the calling session's (`callerPrincipal`); its text is the prompt as given, and a renderer such as
+ * dsh-message-context shows the model who sent it. The cursor is
  * read before the prompt, so replies past it are this message's, plus any the session's running
  * turn finishes meanwhile; reading it does not wake a cold session, and an unknown id fails there
  * with dsh's own "not found". The session is resolved only to deliver, so a cold one resumes only
@@ -456,7 +452,7 @@ export async function promptSession(
   const mode = str(args.mode) === "steer" ? "steer" : "queue";
   const { cursor } = await ctx.sessionController.state({ sessionId }, signal);
   const route = await switchRoute(ctx, sessionId, args, signal);
-  await deliver(ctx, agent, sessionId, `${senderLine(agent)}\n\n${prompt}`, mode, signal);
+  await deliver(ctx, agent, sessionId, prompt, mode, signal);
   const on = route
     ? ` on ${route.provider}/${route.model}${route.reasoningEffort ? ` at ${route.reasoningEffort} effort` : ""}`
     : "";
