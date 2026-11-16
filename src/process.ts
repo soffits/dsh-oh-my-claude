@@ -2047,6 +2047,8 @@ export class ClaudeProcess {
   child: SubprocessHandle;
   key?: string;
   resuming?: boolean;
+  /** Reattached after a restart whose resume another plugin owns: no turn of its own until one opens. */
+  heldForResume?: boolean;
   onIdleResult?(): void;
   /** An interrupt was written and the CLI has not answered it yet. dsh ends the turn's generator
    *  on a user Stop before that answer lands, so the answer reaches an idle process; a stopped
@@ -2373,7 +2375,7 @@ export class ClaudeProcess {
       this.interruptMark = undefined;
       return;
     }
-    if (this.busy || !this.onIdleResult) return;
+    if (this.busy || this.heldForResume || !this.onIdleResult) return;
     if (!isIdleReply(line)) return;
     try {
       // A throw here is inside readline's data handler: it would take the whole host down.
