@@ -41,6 +41,23 @@ import { PLAN_REFUSAL, planRefuses } from "./plan-gate.js";
 /** The MCP tool `_meta` key Claude Code reads to load a tool up front instead of deferring it. */
 export const ALWAYS_LOAD = "anthropic/alwaysLoad";
 
+/** Whether a tool name is left behind Claude Code's ToolSearch by the `deferTools` patterns: `*`
+ *  matches any run of characters, a leading `!` takes a name back out, and the last pattern that
+ *  matches decides. A name no pattern matches stays loaded. */
+export function deferredByPatterns(name: string, patterns: readonly string[]): boolean {
+  let deferred = false;
+  for (const raw of patterns) {
+    const negated = raw.startsWith("!");
+    const glob = negated ? raw.slice(1) : raw;
+    const re = new RegExp(`^${glob.split("*").map(escapeRegExp).join(".*")}$`);
+    if (re.test(name)) deferred = !negated;
+  }
+  return deferred;
+}
+
+/** `text` with every regular-expression metacharacter escaped, to match it literally. */
+const escapeRegExp = (text: string): string => text.replace(/[.+?^${}()|[\]\\]/g, "\\$&");
+
 /** HTTP endpoint path for the MCP bridge handler. */
 export const MCP_PATH = "/dsh-oh-my-claude/mcp";
 const PROTOCOL = "2025-06-18";
@@ -584,6 +601,8 @@ export interface RpcEnv {
   /** Mark every dsh tool dsh itself loads up front as one Claude Code must load up front too
    *  (`toolLoading: dsh`); otherwise Claude Code defers all of them behind its ToolSearch. */
   alwaysLoad?: boolean;
+  /** `deferTools` patterns: tools that stay behind ToolSearch although dsh loads them up front. */
+  deferTools?: readonly string[];
   log?: (level: string, msg: string) => void;
 }
 
@@ -611,6 +630,7 @@ export async function handleRpc(
     mode,
     hidden = HIDDEN,
     alwaysLoad = false,
+    deferTools = [],
     log,
   }: RpcEnv,
 ): Promise<JsonRpcReply | null> {
@@ -657,7 +677,8 @@ export async function handleRpc(
             // with five), so a model would start with no dsh tool in view. This key, which the
             // CLI reads per tool, keeps one loaded; a tool dsh defers itself stays deferred.
             // `_meta` is MCP's own name for the field.
-            if (alwaysLoad && t.deferLoading !== true) listed["_meta"] = { [ALWAYS_LOAD]: true };
+            if (alwaysLoad && t.deferLoading !== true && !deferredByPatterns(t.name, deferTools))
+              listed["_meta"] = { [ALWAYS_LOAD]: true };
             return listed;
           })
           .concat(
@@ -758,6 +779,8 @@ export interface BridgeOptions {
   builtins?: (sessionId: string) => readonly string[];
   /** Whether a session's tools follow dsh's own deferral (`toolLoading: dsh`). */
   dshLoading?: (sessionId: string) => boolean;
+  /** A session's `deferTools` patterns (only read with `toolLoading: dsh`). */
+  deferTools?: (sessionId: string) => readonly string[];
   /** Path of a file holding the bridge key; created once, reused across restarts. */
   keyFile?: string;
   /** Path of a file holding the loopback listener's port, so a restart rebinds the same port and
@@ -907,7 +930,7 @@ async function startLoopback(
  *  web port is the one address that is fixed by configuration. */
 export function registerMcpBridge(
   ctx: PluginContext,
-  { log, version, relay, mode, builtins, dshLoading, keyFile, portFile }: BridgeOptions,
+  { log, version, relay, mode, builtins, dshLoading, deferTools, keyFile, portFile }: BridgeOptions,
 ): Promise<McpBridge> {
   // SAFETY: the key symbol is this plugin's own key on globalThis, typed here once
   const g = globalThis as typeof globalThis & { [KEY_REGISTRY]?: string };
@@ -960,6 +983,7 @@ export function registerMcpBridge(
                 mode: mode ? () => mode(sessionId) : undefined,
                 hidden: builtins ? hiddenFor(builtins(sessionId)) : HIDDEN,
                 alwaysLoad: dshLoading?.(sessionId) === true,
+                deferTools: deferTools?.(sessionId),
                 log,
               });
               return out === null ? send(res, 202) : send(res, 200, out);

@@ -3,6 +3,10 @@ import type { RelayResult } from "./process.js";
 import type { Agent, DshToolsRegistry, JsonValue, PluginContext, ToolSchema, WebServer } from "./dsh.js";
 /** The MCP tool `_meta` key Claude Code reads to load a tool up front instead of deferring it. */
 export declare const ALWAYS_LOAD = "anthropic/alwaysLoad";
+/** Whether a tool name is left behind Claude Code's ToolSearch by the `deferTools` patterns: `*`
+ *  matches any run of characters, a leading `!` takes a name back out, and the last pattern that
+ *  matches decides. A name no pattern matches stays loaded. */
+export declare function deferredByPatterns(name: string, patterns: readonly string[]): boolean;
 /** HTTP endpoint path for the MCP bridge handler. */
 export declare const MCP_PATH = "/dsh-oh-my-claude/mcp";
 /** dsh tools Claude Code already has natively; proxying them would only confuse the model.
@@ -95,10 +99,12 @@ export interface RpcEnv {
     /** Mark every dsh tool dsh itself loads up front as one Claude Code must load up front too
      *  (`toolLoading: dsh`); otherwise Claude Code defers all of them behind its ToolSearch. */
     alwaysLoad?: boolean;
+    /** `deferTools` patterns: tools that stay behind ToolSearch although dsh loads them up front. */
+    deferTools?: readonly string[];
     log?: (level: string, msg: string) => void;
 }
 /** One JSON-RPC request against the tools visible to `agent`. Returns null for notifications. */
-export declare function handleRpc(msg: JsonRpcRequest, { tools, agent, signal, version, open, prompt, wait, relay, mode, hidden, alwaysLoad, log, }: RpcEnv): Promise<JsonRpcReply | null>;
+export declare function handleRpc(msg: JsonRpcRequest, { tools, agent, signal, version, open, prompt, wait, relay, mode, hidden, alwaysLoad, deferTools, log, }: RpcEnv): Promise<JsonRpcReply | null>;
 /** What the adapter hands the bridge. */
 export interface BridgeOptions {
     log: (level: string, msg: string) => void;
@@ -111,6 +117,8 @@ export interface BridgeOptions {
     builtins?: (sessionId: string) => readonly string[];
     /** Whether a session's tools follow dsh's own deferral (`toolLoading: dsh`). */
     dshLoading?: (sessionId: string) => boolean;
+    /** A session's `deferTools` patterns (only read with `toolLoading: dsh`). */
+    deferTools?: (sessionId: string) => readonly string[];
     /** Path of a file holding the bridge key; created once, reused across restarts. */
     keyFile?: string;
     /** Path of a file holding the loopback listener's port, so a restart rebinds the same port and
@@ -144,4 +152,4 @@ export declare function webServerBase(webServer: Pick<WebServer, "port" | "host"
  *  routes. Everywhere else they get the web server route as before, and no listener is started:
  *  a process that outlives a restart can only reconnect to the URL it was started with, and the
  *  web port is the one address that is fixed by configuration. */
-export declare function registerMcpBridge(ctx: PluginContext, { log, version, relay, mode, builtins, dshLoading, keyFile, portFile }: BridgeOptions): Promise<McpBridge>;
+export declare function registerMcpBridge(ctx: PluginContext, { log, version, relay, mode, builtins, dshLoading, deferTools, keyFile, portFile }: BridgeOptions): Promise<McpBridge>;

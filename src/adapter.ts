@@ -284,6 +284,7 @@ export function apply(ctx: PluginContext, config: Schemastery.TypeT<typeof Confi
       builtins: (sessionId) => adapter.ownerFor(sessionId).configFor(sessionId).builtinTools,
       dshLoading: (sessionId) =>
         adapter.ownerFor(sessionId).configFor(sessionId).toolLoading === "dsh",
+      deferTools: (sessionId) => adapter.ownerFor(sessionId).configFor(sessionId).deferTools,
     }).then(
       (mcp) => {
         adapter.mcp = mcp;
