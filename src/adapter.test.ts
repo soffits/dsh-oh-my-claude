@@ -6654,7 +6654,10 @@ console.log("interrupt-on-abort ok");
   assert.equal(written.length, 0, "nothing sent before the bridge exists");
   mount();
   assert.equal(await pending, true, "reconnects once the bridge is mounted");
-  assert.deepEqual(JSON.parse(written[0]!).request, { subtype: "mcp_reconnect", serverName: "dsh" });
+  assert.deepEqual(JSON.parse(written[0]!).request, {
+    subtype: "mcp_reconnect",
+    serverName: "dsh",
+  });
 
   // The mount outlasts the retry window: the process is marked stale, and the turn boundary
   // reconnects it once the bridge is there.
@@ -6670,6 +6673,47 @@ console.log("interrupt-on-abort ok");
   assert.equal(written.length, 1, "the turn boundary reconnects");
   assert.equal(proc.bridgeStale, false);
   console.log("mcp-reconnect waits for the bridge ok");
+}
+
+// A turn that starts while the post-adoption reconnect is still retrying (dsh had no live agent for
+// the session until this turn) reconnects before its prompt, and the background retries then stop.
+{
+  const adapter = new ClaudeCodeAdapter(fakeCtx({ on() {} }), Config({}));
+  (adapter as any).mcp = { url: "http://x", key: "k" };
+  let agentLive = false;
+  const written: string[] = [];
+  const proc: any = {
+    alive: true,
+    busy: false,
+    bridgeStale: false,
+    controlListener: undefined,
+    write(line: string) {
+      written.push(line);
+      const r = JSON.parse(line);
+      const ok = agentLive;
+      setTimeout(() => {
+        proc.controlListener({
+          type: "control_response",
+          request_id: r.request_id,
+          response: ok
+            ? { subtype: "success", request_id: r.request_id, response: {} }
+            : { subtype: "error", request_id: r.request_id, error: "no live agent" },
+        });
+      }, 0);
+      return true;
+    },
+  };
+  const background = adapter.reconnectBridge(proc, "s", 30, 100);
+  await new Promise((r) => setTimeout(r, 5));
+  assert.equal(written.length, 1, "the first background try failed");
+  assert.equal(proc.bridgeStale, true, "a reconnect still retrying is owed");
+  agentLive = true;
+  await adapter.reconnectIfStale(proc, "s");
+  assert.equal(written.length, 2, "the turn boundary reconnects at once");
+  assert.equal(proc.bridgeStale, false);
+  assert.equal(await background, true, "the background retries end with the turn's reconnect");
+  assert.equal(written.length, 2, "no further tries after it landed");
+  console.log("mcp-reconnect owed while retrying ok");
 }
 
 // mcpStatus and mcpReconnect: decode the server list; reconnect names the server.
