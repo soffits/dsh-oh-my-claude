@@ -16,6 +16,8 @@ const ROUTE = "/dsh-oh-my-claude/usage";
 /** Answers are served from cache this long, however many tabs, browsers and boxes ask. */
 const CACHE_MS = 5 * 60_000;
 const FORCE_MIN_AGE_MS = 30_000;
+/** A failed read (not a 429, which backs off on its own) is answered from memory this long. */
+const FAIL_MS = 60_000;
 /** After a 429 with no usable Retry-After, wait at least this long before touching the endpoint. */
 const RATE_LIMIT_FLOOR_MS = 60_000;
 /** Repeated 429s double the wait up to this; the endpoint's budget is the account's, shared with
@@ -506,7 +508,11 @@ export function parseUsageMemo(text: string): Record<string, UsageMemo> | undefi
   const out: Record<string, UsageMemo> = {};
   for (const [key, e] of Object.entries(raw.entries)) {
     if (!isRec(e)) continue;
-    const entry: UsageMemo = { at: finite(e.at), limitedUntil: finite(e.limitedUntil), strikes: finite(e.strikes) };
+    const entry: UsageMemo = {
+      at: finite(e.at),
+      limitedUntil: finite(e.limitedUntil),
+      strikes: finite(e.strikes),
+    };
     const r = e.reply;
     if (
       isRec(r) &&
@@ -529,7 +535,7 @@ export function parseUsageMemo(text: string): Record<string, UsageMemo> | undefi
 /** The last good reply of this memo, flagged stale, in place of `error`; the error itself when
  *  nothing is known, or when the login is gone (that one the panel must say). */
 const fallback = (m: UsageMemo, error: UsageReply): UsageReply =>
-  m.reply && !(!error.ok && error.error.startsWith("login expired"))
+  m.reply && !(!error.ok && /^(login expired|needs a Claude Code login)/.test(error.error))
     ? { ...m.reply, stale: true as const }
     : error;
 
@@ -537,19 +543,25 @@ const fallback = (m: UsageMemo, error: UsageReply): UsageReply =>
  * The plan-usage reader behind the route: one read of the endpoint per CACHE_MS per login however
  * many tabs, browsers and boxes ask, the last good reply and the 429 backoff kept in `file` so a
  * restart does not start blind, and the last good reply (flagged `stale`) served instead of an error
- * when the endpoint cannot be read. `fetchImpl` and `now` are for tests.
+ * when the endpoint cannot be read. `fetchImpl`, `now` and `write` are for tests.
  */
 export function createUsageReader(
   file: string,
   fetchImpl: UsageFetch = fetch,
   now: () => number = Date.now,
+  write: (file: string, value: unknown) => Promise<void> = writeJson,
 ): (home: string, sshHost?: string) => Promise<UsageReply> {
   // Per-key memo (a home, or an ssh box) so different instances keep their own answers. It is also
   // written to disk: a restart used to leave the route blind, so the first read after it, made
   // while the endpoint was still rate limited, had no figures to show and answered a bare error.
   const memo = new Map<string, UsageMemo>();
   const inFlight = new Map<string, Promise<UsageReply>>();
+  // A failure that is not a 429 (a 401, a 5xx, the network down) has no backoff of its own; without
+  // this every tab's poll would ask Anthropic again. Memory only: a restart may try once at once.
+  const failed = new Map<string, { at: number; reply: UsageReply }>();
   let usageLoaded: Promise<void> | undefined;
+  /** Reads the file once per reader; a missing or damaged file leaves the memo empty, never throws,
+   *  and an entry already in memory wins over the one on disk. */
   const usageLoad = (): Promise<void> =>
     (usageLoaded ??= readFile(file, "utf8")
       .then(parseUsageMemo)
@@ -558,18 +570,24 @@ export function createUsageReader(
         for (const [key, entry] of Object.entries(entries ?? {}))
           if (!memo.has(key)) memo.set(key, entry);
       }));
+  let saving: Promise<void> = Promise.resolve();
+  /** Writes the whole memo in the background, one write at a time and each snapshotting the memo
+   *  as it starts, so a slow earlier write can never land over a later one. A failed write is
+   *  dropped, not retried: the memo still works in memory and the next restart starts blind. */
   const usageSave = () => {
-    void writeJson(file, { entries: Object.fromEntries(memo) }).catch(() => {
-      // Still works in memory; the next restart just starts blind again.
-    });
+    saving = saving
+      .then(() => write(file, { entries: Object.fromEntries(memo) }))
+      .catch(() => undefined);
   };
+  /** This key's memo entry, created empty (and so never on disk until a read sets it) if new. */
   const slot = (key: string): UsageMemo => {
     let m = memo.get(key);
     if (!m) memo.set(key, (m = { at: 0, limitedUntil: 0, strikes: 0 }));
     return m;
   };
-  // Background polls never force: the endpoint's budget is the account's, shared by every tab,
-  // browser and CLI, so one read per CACHE_MS serves them all.
+  /** One box's plan usage. Never forces: the endpoint's budget is the account's, shared by every
+   *  tab, browser and CLI, so one read per CACHE_MS serves them all. Answers stale figures, not an
+   *  error, while limited or failing, unless the login itself is gone. */
   const read = async (home: string, sshHost?: string): Promise<UsageReply> => {
     await usageLoad();
     const key = sshHost ? `ssh:${sshHost}` : home;
@@ -578,6 +596,8 @@ export function createUsageReader(
     if (t0 < m.limitedUntil)
       return fallback(m, { ok: false, error: "usage endpoint rate limited" });
     if (m.reply && t0 - m.at < CACHE_MS) return m.reply;
+    const miss = failed.get(key);
+    if (miss && t0 - miss.at < FAIL_MS) return miss.reply;
     if (!inFlight.has(key)) {
       inFlight.set(
         key,
@@ -588,6 +608,7 @@ export function createUsageReader(
             m.at = now();
             m.limitedUntil = 0;
             m.strikes = 0;
+            failed.delete(key);
             usageSave();
             return reply;
           }
@@ -596,7 +617,9 @@ export function createUsageReader(
             m.limitedUntil = now() + backoffMs(reply.retryAfterMs, m.strikes);
             usageSave();
           }
-          return fallback(m, reply);
+          const out = fallback(m, reply);
+          failed.set(key, { at: now(), reply: out });
+          return out;
         }),
       );
     }
@@ -652,10 +675,14 @@ export function registerUsageRoute(
     for (const [key, entry] of Object.entries(entries))
       if (!bdCached.has(key)) bdCached.set(key, entry);
   };
+  let bdSaving: Promise<void> = Promise.resolve();
+  /** Writes the breakdown cache one write at a time, each snapshotting it as it starts, so an
+   *  older snapshot never lands last. A failed write is dropped: the cache still works in memory
+   *  and the next restart just pays the spawn again. */
   const bdSave = () => {
-    void writeJson(bdFile, { entries: Object.fromEntries(bdCached) }).catch(() => {
-      // A cache that cannot be written still works in memory; the next restart just pays again.
-    });
+    bdSaving = bdSaving
+      .then(() => writeJson(bdFile, { entries: Object.fromEntries(bdCached) }))
+      .catch(() => undefined);
   };
   const readBd = (
     force: boolean,

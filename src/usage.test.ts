@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { UsageCredits } from "./usage.js";
+import type { UsageCredits, UsageMemo } from "./usage.js";
 import {
   backoffMs,
   createUsageReader,
@@ -505,15 +505,39 @@ console.log("breakdown-cache ok");
   clock += 10 * 60_000;
   const failed = await third(home);
   assert.ok(failed.ok && failed.stale === true);
+  // a failure is remembered for a minute, so polls inside it do not reach the endpoint
+  const before = calls;
+  clock += 30_000;
+  await third(home);
+  assert.equal(calls, before);
+  clock += 31_000;
+  await third(home);
+  assert.equal(calls, before + 1);
   const other = await third(join(dir, "other-home"));
   assert.equal(other.ok, false);
 
+  // a box logged out since: its old figures are not shown, the missing login is
+  mode = "ok";
+  const leaving = tempDir("omc-usage-leaving-");
+  const creds = join(leaving, ".credentials.json");
+  writeFileSync(creds, readFileSync(join(home, ".credentials.json")));
+  assert.ok((await third(leaving)).ok);
+  rmSync(creds);
+  clock += 10 * 60_000;
+  const loggedOut = await third(leaving);
+  assert.ok(!loggedOut.ok && loggedOut.error === "needs a Claude Code login");
+  mode = "down";
+
   // nothing known: the error is all there is
-  const fresh = createUsageReader(join(dir, "none.json"), async () => ({
-    status: 429,
-    headers: { get: () => null },
-    json: async () => ({}),
-  }), () => clock);
+  const fresh = createUsageReader(
+    join(dir, "none.json"),
+    async () => ({
+      status: 429,
+      headers: { get: () => null },
+      json: async () => ({}),
+    }),
+    () => clock,
+  );
   const bare = await fresh(home);
   assert.deepEqual(bare.ok === false && bare.error, "usage endpoint rate limited");
 
@@ -522,6 +546,30 @@ console.log("breakdown-cache ok");
   assert.equal(backoffMs(60_000, 3), 240_000);
   assert.equal(backoffMs(60_000, 20), 15 * 60_000);
   assert.equal(backoffMs(3_600_000, 1), 3_600_000);
+
+  // saves run one at a time, so a slow first write cannot land over the newer second one
+  {
+    const second = tempDir("omc-usage-second-");
+    writeFileSync(join(second, ".credentials.json"), readFileSync(join(home, ".credentials.json")));
+    let disk = "";
+    let writes = 0;
+    const slowFirst = async (_file: string, value: unknown) => {
+      const text = JSON.stringify(value);
+      await new Promise((r) => setTimeout(r, writes++ === 0 ? 50 : 0));
+      disk = text;
+    };
+    const ok = async () => ({
+      status: 200,
+      json: async () => ({ limits: [{ kind: "session", percent: 1, resets_at: 1_900_000_000 }] }),
+    });
+    const both = createUsageReader(join(dir, "order.json"), ok, () => clock, slowFirst);
+    await Promise.all([both(home), both(second)]);
+    await new Promise((r) => setTimeout(r, 120));
+    assert.equal(writes, 2);
+    // every login's reply, not just the slow first write's snapshot (which predates the second reply)
+    const onDisk: Record<string, UsageMemo> = JSON.parse(disk).entries;
+    assert.ok(onDisk[home]?.reply && onDisk[second]?.reply);
+  }
 
   // a damaged file is no memo, not a crash
   assert.equal(parseUsageMemo("{not json"), undefined);

@@ -94,6 +94,63 @@ assert.equal(
   claudeProviderOf(liveCtx("claude-code-nova", { lastUsed: { provider: "deepseek" } }), "s1"),
   "claude-code-nova",
 );
+/** A tab with session `id` open on `provider` and nothing on its list row. */
+const liveCtxFor = (id: string, provider: string): ClientCtx =>
+  ({
+    modelDirectories: {
+      directoryFor: () => ({ store: { getSnapshot: () => ({ current: { provider } }) } }),
+    },
+    sessions: { list: { getSnapshot: () => ({ byId: { [id]: { id } } }) } },
+  }) as unknown as ClientCtx;
+
+// After a reconnect dsh resyncs: the directory's `current` is null while the catalog loads and the
+// list row arrives before its projections. Unknown keeps the last answer instead of reading as
+// "not Claude", which flickered the open session to dsh's blue on a slow link.
+const resyncing = (row: object | undefined): ClientCtx =>
+  ({
+    modelDirectories: {
+      directoryFor: () => ({
+        store: { getSnapshot: () => ({ current: null, status: "loading" }) },
+      }),
+    },
+    sessions: { list: { getSnapshot: () => ({ byId: row ? { r1: row } : {} }) } },
+  }) as unknown as ClientCtx;
+assert.equal(claudeProviderOf(resyncing(undefined), "r1"), undefined, "never seen: no answer");
+assert.equal(claudeProviderOf(liveCtxFor("r1", "claude-code"), "r1"), "claude-code");
+assert.equal(
+  claudeProviderOf(resyncing({ id: "r1" }), "r1"),
+  "claude-code",
+  "row without projections",
+);
+assert.equal(claudeProviderOf(resyncing(undefined), "r1"), "claude-code", "row not resent yet");
+assert.equal(
+  claudeProviderOf(
+    resyncing({ id: "r1", projectionValues: { modelSelection: { lastUsed: null, next: null } } }),
+    "r1",
+  ),
+  "claude-code",
+  "the projection's empty initial state is not a switch",
+);
+// A real answer still moves it, both ways.
+assert.equal(claudeProviderOf(liveCtxFor("r1", "deepseek"), "r1"), undefined);
+assert.equal(
+  claudeProviderOf(resyncing({ id: "r1" }), "r1"),
+  undefined,
+  "a known switch away holds",
+);
+assert.equal(
+  claudeProviderOf(
+    resyncing({
+      id: "r1",
+      projectionValues: {
+        modelSelection: { lastUsed: null, next: { provider: "claude-code-nova" } },
+      },
+    }),
+    "r1",
+  ),
+  "claude-code-nova",
+  "a selection on the row answers even while the directory loads",
+);
 
 assert.equal(numberOr(5), 5);
 assert.equal(numberOr(true), undefined);
@@ -117,6 +174,22 @@ assert.equal(
 // A retention the main view has let go of is not a selection.
 assert.equal(openSessionId(listCtx({ byId: { s1: { retainedBy: {} } } })), undefined);
 assert.equal(openSessionId(listCtx(undefined)), undefined);
+// The same snapshot object is scanned once; a new one (the list changed) is scanned again.
+{
+  let reads = 0;
+  const rows = { a: { retainedBy: { mainView: 1 } } };
+  const snap = {
+    get byId() {
+      reads++;
+      return rows;
+    },
+  };
+  const ctx = listCtx(snap);
+  assert.equal(openSessionId(ctx), "a");
+  assert.equal(openSessionId(ctx), "a");
+  assert.equal(reads, 1, "one scan per snapshot");
+  assert.equal(openSessionId(listCtx({ byId: { b: { retainedBy: { mainView: 1 } } } })), "b");
+}
 // A throw that is not a disposed context answers undefined and leaves the bundle live: the next
 // read still works. It used to retire everything until a refresh (owner, 2026-09-22: new sessions
 // lost the Claude look after switching languages back and forth).

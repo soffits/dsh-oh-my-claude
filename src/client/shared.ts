@@ -492,15 +492,21 @@ export function openSession(ctx: ClientCtx, id: string): void {
   console.warn(`[oh-my-claude] no session navigation on this dsh; cannot open ${id}`);
 }
 
+/** The ring's arc inside its button; `isRingRoot` says why it must be this exact shape. */
+export const RING_ARC = 'button[aria-haspopup="dialog"] > svg > circle + circle';
 /**
  * Put the plan usage inside dsh's context-meter popover, above the "N% of context used" line,
  * and one compact line into the ring's hover tooltip.
  * The meter (dsh-client-ui-conversation ContextMeter) has no slot, so this watches the DOM for
  * its dialog: a `[role=dialog]` whose parent holds a `button[aria-haspopup=dialog]` with the ring.
  * ponytail: DOM hook on a structural selector; swap for a slot the day the meter grows one.
+ * The circles must sit directly in the button's own `<svg>`: dsh's subagent count button also
+ * opens a dialog, and while a subagent runs its activity dot draws circles nested in a span. A loose
+ * `circle + circle` claimed that button as the ring, so the plugin relabelled it and the real
+ * meter's popup opened without the usage block (owner, 2026-11-16).
+ * True when `el` directly holds the meter's ring button; false for null and for the subagent button.
  */
-export const isRingRoot = (el: HTMLElement | null) =>
-  !!el?.querySelector(':scope > button[aria-haspopup="dialog"] circle + circle');
+export const isRingRoot = (el: HTMLElement | null) => !!el?.querySelector(`:scope > ${RING_ARC}`);
 
 /**
  * The mount a session runs on (`claude-code`, `claude-code-nova`, …), else undefined.
@@ -513,16 +519,28 @@ export const isRingRoot = (el: HTMLElement | null) =>
  */
 export const claudeMount = (provider: string | undefined): string | undefined =>
   provider?.startsWith("claude-code") === true ? provider : undefined;
+/** Per session, the last mount dsh actually reported (undefined: a known non-Claude session), for
+ *  the moments dsh reports nothing. Capped so a long-lived tab does not keep every id it ever saw. */
+const lastMount = new Map<string, string | undefined>();
+const LAST_MOUNT_KEEP = 10_000;
+/** Record `mount` as what dsh said about `id`, and return it. */
+const remember = (id: string, mount: string | undefined): string | undefined => {
+  lastMount.delete(id);
+  lastMount.set(id, mount);
+  if (lastMount.size > LAST_MOUNT_KEEP) lastMount.delete(lastMount.keys().next().value ?? "");
+  return mount;
+};
+
 /** The Claude mount for a session, open or not: read the live model directory first and the list
  *  projection after, so a sidebar session this tab never opened still resolves, undefined for a
- *  non-Claude session. */
+ *  non-Claude session. When neither says anything, the last answer stands (see the end). */
 export const claudeProviderOf = (ctx: ClientCtx, id: string): string | undefined => {
   try {
     const live = ctx.modelDirectories.directoryFor(id).store.getSnapshot().current?.provider;
     // A live provider is the answer, Claude or not. Falling through on a non-Claude one used to
     // land on `lastUsed` below, so a session that had run a Claude turn and then switched to
     // another provider kept the Claude control and the ✻ button (owner, 2026-09-23).
-    if (live !== undefined) return claudeMount(live);
+    if (live !== undefined) return remember(id, claudeMount(live));
   } catch {
     // `directoryFor` needs a scope and a binding, and dsh only holds those for a session this tab
     // has opened. A session running in the sidebar and never clicked throws here, which used to
@@ -532,8 +550,17 @@ export const claudeProviderOf = (ctx: ClientCtx, id: string): string | undefined
   // projection so a session can be described without being activated. A pending pick outranks the
   // last request for the same reason as above: it is the newer truth, whichever provider it names.
   const sel = ctx.sessions.list.getSnapshot()?.byId[id]?.projectionValues?.modelSelection;
-  if (sel?.next?.provider !== undefined) return claudeMount(sel.next.provider);
-  return claudeMount(sel?.lastUsed?.provider);
+  if (sel?.next?.provider !== undefined) return remember(id, claudeMount(sel.next.provider));
+  if (sel?.lastUsed?.provider !== undefined)
+    return remember(id, claudeMount(sel.lastUsed.provider));
+  // Nothing to read: after a reconnect dsh reloads the model catalog (the directory's `current` is
+  // null while it loads) and resends list rows before their projections (or with the projection's
+  // empty initial state, both selections null), so for a moment neither
+  // source knows the session's model. Reading that as "not Claude" painted the open session in
+  // dsh's blue and back once a second, for up to several seconds on a slow phone link or a busy
+  // box (owner, 2026-11-17; reproduced on throttled 3G with 750 sessions in the list). Unknown is
+  // not a switch: keep the last answer dsh gave for this session.
+  return lastMount.get(id);
 };
 
 /**
@@ -631,6 +658,12 @@ export const guard = <A extends unknown[]>(fn: (...args: A) => void): ((...args:
     }
   };
 };
+/** The last list snapshot `openSessionId` scanned and what it found there. */
+interface OpenCache {
+  snap: unknown;
+  id: string | undefined;
+}
+let openCache: OpenCache = { snap: undefined, id: undefined };
 /**
  * The session the main view is showing. The main view retains its session through the Session
  * Controller, which shows up on the row as `retainedBy.mainView`. Exactly one row carries it, so
@@ -641,10 +674,21 @@ export const openSessionId = (ctx: ClientCtx): string | undefined => {
   if (gone) return undefined;
   try {
     const snap = ctx.sessions.list.getSnapshot();
+    // The scan walks every session dsh lists, hundreds on a busy box, and a dozen components ask
+    // on every render: typing in the composer re-renders them, and on a phone this walk was most
+    // of the plugin's cost per keystroke (owner, 2026-11-17: about 35 ms a character at a Pixel
+    // 3a's speed). dsh hands out a new snapshot object whenever the list changes, so the answer
+    // holds for as long as the object does.
+    if (snap !== undefined && snap === openCache.snap) return openCache.id;
+    let found: string | undefined;
     for (const [id, summary] of Object.entries(snap?.byId ?? {})) {
-      if ((summary.retainedBy?.mainView ?? 0) > 0) return id;
+      if ((summary.retainedBy?.mainView ?? 0) > 0) {
+        found = id;
+        break;
+      }
     }
-    return undefined;
+    openCache = { snap, id: found };
+    return found;
   } catch (e) {
     // Only a disposed context retires the bundle. Any other throw (a store dsh is rebuilding, say
     // mid language switch) used to retire it too, and every loop went quiet until a refresh: new
@@ -1069,9 +1113,8 @@ export type UsageBreakdownReply =
 // Per provider: a second account is a second answer. The breakdown is a spawn on the box, so this
 // 60 s memo keeps a popover reopen from re-running `claude -p /usage`.
 //
-// No `force=1` here, unlike loadUsage. On the route, `force` shortens the server cache from five
-// minutes to thirty seconds, which is right for the plan windows (one HTTP call to Anthropic) and
-// wrong for this one: the breakdown spawns `claude -p "/usage"` on the box, measured at 3.6 s on
+// No `force=1` here except from Refresh. On the breakdown route, `force` makes the box read again,
+// and the breakdown spawns `claude -p "/usage"` on the box, measured at 3.6 s on
 // 2026-09-20. With force on, every reopen past this memo's minute paid that spawn again, and a
 // second tab paid it whenever it was first to ask. Without it the server answers from its
 // five-minute cache and the figures, which cover a 24 h and a 7 d window, lose nothing.

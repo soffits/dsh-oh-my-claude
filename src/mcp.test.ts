@@ -445,7 +445,8 @@ console.log("mcp ok");
   const sent: Array<{ content: unknown; source: unknown }> = [];
   const child = {
     model: { select: (r: unknown) => void (calls.push("select"), selected.push(r)) },
-    followup: (m: { content: unknown; source: unknown }) => void (calls.push("prompt"), sent.push(m)),
+    followup: (m: { content: unknown; source: unknown }) =>
+      void (calls.push("prompt"), sent.push(m)),
   };
   // SAFETY: a stand-in for the three host services openSession reads; there is no selectModel,
   // since that one would also save the pick as the box's default for new sessions
@@ -620,9 +621,11 @@ console.log("mcp ok");
       resolveAgent: async () => ({
         agent: {
           followup: (m: Delivered) =>
-            void (calls.push(`prompt queue ${m.content[0]?.text}`), senders.push(m.source.principal)),
+            void (calls.push(`prompt queue ${m.content[0]?.text}`),
+            senders.push(m.source.principal)),
           steer: (m: Delivered) =>
-            void (calls.push(`prompt steer ${m.content[0]?.text}`), senders.push(m.source.principal)),
+            void (calls.push(`prompt steer ${m.content[0]?.text}`),
+            senders.push(m.source.principal)),
         },
       }),
       wait: async (r: unknown) => {
