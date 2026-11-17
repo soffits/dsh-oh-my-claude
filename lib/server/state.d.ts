@@ -7,6 +7,8 @@ export declare const CLAUDE_HOME: string;
  * Non-empty → expanded absolute path; empty → falls through to CLAUDE_HOME. */
 export declare function resolveClaudeHome(dir: string): string;
 export declare const STATE_DIR: string;
+/** A test run: a `*.test.*` entry file (`bun src/x.test.ts`) or a runner that sets NODE_ENV=test. */
+export declare function isTestRun(entry?: string, env?: NodeJS.ProcessEnv): boolean;
 /** Derive per-instance state dir from a provider id; default id uses the shared top-level path. */
 export declare function stateDir(providerId: string): string;
 /** Append one line to the resume trace; best effort, never throws. */

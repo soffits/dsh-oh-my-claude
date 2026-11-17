@@ -5,7 +5,8 @@
 import { execFile } from "node:child_process";
 import { appendFile, copyFile, mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
-import { homedir } from "node:os";
+import { mkdtempSync, rmSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { dirname, isAbsolute, join, resolve as resolvePath } from "node:path";
 import type { AsideEntry } from "./adapter/types.js";
 import type { TurnRecord } from "./adapter/turn.js";
@@ -24,11 +25,28 @@ export function resolveClaudeHome(dir: string): string {
 
 // Session state: which Claude sessions this plugin started, so resume does not depend on guessing
 // where Claude Code keeps its transcripts. A wrong guess still degrades to a fresh full-transcript run.
-// `DSH_OMC_STATE_DIR` is for the test suite: every store below is read-modify-write into this dir,
-// and a test that exercised one against the real path rewrote the running plugin's files (found
-// 2026-09-08: a test session id in permission-modes.json, two days of test lines in resume.log).
-export const STATE_DIR =
-  process.env.DSH_OMC_STATE_DIR || join(homedir(), ".local", "state", "dsh-oh-my-claude");
+// `DSH_OMC_STATE_DIR` moves every store below. Under a test it defaults to a fresh temp dir: the
+// stores are read-modify-write, and a test file run without the variable rewrote the running
+// plugin's files (a test session id in permission-modes.json, test lines in resume.log, test
+// model lists). The variable is set here too, so modules that read it directly follow.
+export const STATE_DIR = process.env.DSH_OMC_STATE_DIR || defaultStateDir();
+
+/** A test run: a `*.test.*` entry file (`bun src/x.test.ts`) or a runner that sets NODE_ENV=test. */
+export function isTestRun(
+  entry = process.argv[1] ?? "",
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  return /\.test\.[cm]?[jt]sx?$/.test(entry) || env.NODE_ENV === "test" || !!env.VITEST;
+}
+
+/** The live state dir, or under a test a fresh temp dir that is exported and removed at exit. */
+function defaultStateDir(): string {
+  if (!isTestRun()) return join(homedir(), ".local", "state", "dsh-oh-my-claude");
+  const dir = mkdtempSync(join(tmpdir(), "omc-test-state-"));
+  process.env.DSH_OMC_STATE_DIR = dir;
+  process.on("exit", () => rmSync(dir, { recursive: true, force: true }));
+  return dir;
+}
 const STATE_FILE = join(STATE_DIR, "sessions.json");
 /** Derive per-instance state dir from a provider id; default id uses the shared top-level path. */
 export function stateDir(providerId: string): string {
