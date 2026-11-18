@@ -20,8 +20,13 @@ Versions from 1.0.0 up are on npm. Everything below 1.0.0 was released from the 
 - `resumeAfterRestart` (default on): turn it off when another plugin, such as [dsh-restart-resume](https://github.com/soffits/dsh-restart-resume), continues every turn a dsh restart cut off. The plugin then only reattaches the Claude processes: no busy-file nudges, no reconnect wakes, and a reply Claude finished while dsh was down waits for the turn that plugin opens instead of opening one of its own. The busy file is set per model stream, so a turn cut while dsh was running one of its tools was never nudged; dsh's own log sees that cut.
 - `deferTools`: with `toolLoading: dsh`, the bridged tools to leave behind Claude Code's `ToolSearch` although dsh loads them up front. A home with many tools it rarely calls (a Home Assistant server, a scheduler, plugin and session tools) no longer sends their schemas with every request; a model loads one by name when it needs it. Names take `*` as a wildcard and a leading `!` takes names back out, so `["*", "!bash", "!read"]` defers all but those two. A change starts a new Claude process on the session's next turn.
 
+## [1.6.6] - 2026-11-17
+
+dsh: runs on 0.2.2-alpha.2 through 0.2.2-rc.4; built and tested on 0.2.2-rc.4.
+
 ### Fixed
 
+- The prompt history search (Ctrl+R in the composer) shows what you type again. The scope button beside the search box took the whole line, which squeezed the box down to its magnifier, so typed text was hidden.
 - Pages with long sessions stay lighter on slow devices during a turn. The stylesheet carried the rainbow and quote colours for the composer all the time, and while any such rule is in the page the browser works out highlight styles for every element on each style pass, which doubled the cost of every pass on a phone. The colours are now added only while something on screen uses them.
 - Typing in the composer costs less with many sessions in the sidebar. Every render asked which session is open by walking all of dsh's sessions, and typing re-renders a dozen components per keystroke; on a phone-speed CPU that walk was about 35 ms of each character. The answer is now kept until dsh's session list changes, and the once-a-second session-notice check skips its walk the same way.
 - After a dsh restart, a kept Claude process whose session has no open tab keeps its working `dsh` tools. The plugin used to send Claude Code a reconnect while dsh had no agent for the session yet; it failed, and Claude Code then marked a connection that would have worked as failed until the next turn. The reconnect now waits until dsh has the session's agent, and otherwise is made at the next turn as before. Thanks to @soffits (#313)
