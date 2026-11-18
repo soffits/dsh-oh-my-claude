@@ -6,6 +6,10 @@ Versions from 1.0.0 up are on npm. Everything below 1.0.0 was released from the 
 
 ## [Unreleased]
 
+### Fixed
+
+- The plan usage no longer shows up in other plugins' popovers. The context ring was found by any dialog button whose icon had two circles, so a media player's settings button got the usage block; the ring is now the one whose arc carries the meter's dash array.
+
 ### Changed
 
 - No "Sent by session …" line above messages another dsh session sent. [dsh-message-context](https://github.com/soffits/dsh-message-context) draws every message whose `source.principal` is an agent (another session, a scheduled job) on the assistant's side with its sender, so it no longer sits in the owner's bubble with a label on top.
