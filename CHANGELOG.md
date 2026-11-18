@@ -12,6 +12,7 @@ Versions from 1.0.0 up are on npm. Everything below 1.0.0 was released from the 
 
 ### Changed
 
+- The notice that opens a turn when Claude replies on its own after a background task now says it comes from Oh My Claude, that nobody sent a message, and names the task that finished by the description it started with. The old one-line notice read like an empty message from someone when a model went back through the session's history. Thanks to @soffits (#320)
 - No "Sent by session …" line above messages another dsh session sent. [dsh-message-context](https://github.com/soffits/dsh-message-context) draws every message whose `source.principal` is an agent (another session, a scheduled job) on the assistant's side with its sender, so it no longer sits in the owner's bubble with a label on top.
 - `prompt_session` no longer writes a "[Sent by the agent in dsh session …]" line into the message. The sender is on `source.principal` (kind `dsh-session`), and a renderer such as [dsh-message-context](https://github.com/soffits/dsh-message-context) shows it to the model, the same way as for chat channels.
 
