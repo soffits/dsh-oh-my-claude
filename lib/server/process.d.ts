@@ -1127,6 +1127,9 @@ export declare class ClaudeProcess {
      *  Claude turn no dsh turn read. For a subagent dsh then holds no live agent, so every tool call
      *  in that answer failed with "no live agent". */
     countStaleResults(): number;
+    /** Whether the queue holds a turn Claude finished on its own (a successful `result`, as
+     *  `noteIdleResult` would wake for), not only a notice it has yet to answer. */
+    hasIdleReply(): boolean;
     /** True when the queue holds a frame a turn has to read out: a frame of a turn Claude ran while
      *  dsh was away (TURN_FRAMES), a relayed call injected for a turn, or the `task_notification` of
      *  a background task that finished meanwhile, which the translator draws as a completion line.
