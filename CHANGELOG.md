@@ -6,20 +6,13 @@ Versions from 1.0.0 up are on npm. Everything below 1.0.0 was released from the 
 
 ## [Unreleased]
 
-## [1.6.7] - 2026-11-18
-
-dsh: runs on 0.2.2-alpha.2 through 0.2.2-rc.5; built and tested on 0.2.2-rc.5.
-
 ### Fixed
 
 - A Claude process that keeps working through a dsh restart no longer burns its turn on refused dsh calls. Until the restart resumer continued its turn, dsh had no agent for the session and the bridge answered every call with "no live agent for session", so the model retried a few times and ended the turn reporting that its tools were gone. The bridge now holds such a call (from a session whose Claude process this plugin still runs) until dsh has the agent again, for up to three minutes, and the post-restart reconnect leaves a `dsh` server that is still connected alone, so it no longer cuts the held call.
-- A restart no longer wakes a session whose turn had already ended. When the plugin reattached to a Claude process that kept running, a finished background job queued in it was enough to send the "dsh restarted and reattached ... Continue where you are" notice, and a subagent its parent had interrupted went back to the task it was told to drop. Only a turn that was still running when dsh went down is resumed now; after a Stop, an abort or a finished turn the session stays attached and is not told to continue. A reply Claude finished on its own while dsh was away still shows, under the background-task notice, and a turn still running when dsh went down is woken even when its Claude is reattached late. Thanks to @soffits (#321)
-- A restart no longer throws away what a reattached Claude wrote while dsh was away when anything in its start settings had changed (an instructions file edit is enough). The turn that exists to show that output replaced the process first, so the reply was lost and the turn came out blank; it now keeps the process and the next prompt replaces it. Thanks to @soffits (#321)
 - The plan usage no longer shows up in other plugins' popovers. The context ring was found by any dialog button whose icon had two circles, so a media player's settings button got the usage block; the ring is now the one whose arc carries the meter's dash array.
 
 ### Changed
 
-- The notice that opens a turn when Claude replies on its own after a background task now says it comes from Oh My Claude, that nobody sent a message, and names the task that finished by the description it started with. The old one-line notice read like an empty message from someone when a model went back through the session's history. Thanks to @soffits (#320)
 - No "Sent by session …" line above messages another dsh session sent. [dsh-message-context](https://github.com/soffits/dsh-message-context) draws every message whose `source.principal` is an agent (another session, a scheduled job) on the assistant's side with its sender, so it no longer sits in the owner's bubble with a label on top.
 - `prompt_session` no longer writes a "[Sent by the agent in dsh session …]" line into the message. The sender is on `source.principal` (kind `dsh-session`), and a renderer such as [dsh-message-context](https://github.com/soffits/dsh-message-context) shows it to the model, the same way as for chat channels.
 
@@ -27,6 +20,19 @@ dsh: runs on 0.2.2-alpha.2 through 0.2.2-rc.5; built and tested on 0.2.2-rc.5.
 
 - `resumeAfterRestart` (default on): turn it off when another plugin, such as [dsh-restart-resume](https://github.com/soffits/dsh-restart-resume), continues every turn a dsh restart cut off. The plugin then only reattaches the Claude processes: no busy-file nudges, no reconnect wakes, and a reply Claude finished while dsh was down waits for the turn that plugin opens instead of opening one of its own. The busy file is set per model stream, so a turn cut while dsh was running one of its tools was never nudged; dsh's own log sees that cut.
 - `deferTools`: with `toolLoading: dsh`, the bridged tools to leave behind Claude Code's `ToolSearch` although dsh loads them up front. A home with many tools it rarely calls (a Home Assistant server, a scheduler, plugin and session tools) no longer sends their schemas with every request; a model loads one by name when it needs it. Names take `*` as a wildcard and a leading `!` takes names back out, so `["*", "!bash", "!read"]` defers all but those two. A change starts a new Claude process on the session's next turn.
+
+## [1.6.7] - 2026-11-18
+
+dsh: runs on 0.2.2-alpha.2 through 0.2.2-rc.5; built and tested on 0.2.2-rc.5.
+
+### Fixed
+
+- A restart no longer wakes a session whose turn had already ended. When the plugin reattached to a Claude process that kept running, a finished background job queued in it was enough to send the "dsh restarted and reattached ... Continue where you are" notice, and a subagent its parent had interrupted went back to the task it was told to drop. Only a turn that was still running when dsh went down is resumed now; after a Stop, an abort or a finished turn the session stays attached and is not told to continue. A reply Claude finished on its own while dsh was away still shows, under the background-task notice, and a turn still running when dsh went down is woken even when its Claude is reattached late. Thanks to @soffits (#321)
+- A restart no longer throws away what a reattached Claude wrote while dsh was away when anything in its start settings had changed (an instructions file edit is enough). The turn that exists to show that output replaced the process first, so the reply was lost and the turn came out blank; it now keeps the process and the next prompt replaces it. Thanks to @soffits (#321)
+
+### Changed
+
+- The notice that opens a turn when Claude replies on its own after a background task now says it comes from Oh My Claude, that nobody sent a message, and names the task that finished by the description it started with. The old one-line notice read like an empty message from someone when a model went back through the session's history. Thanks to @soffits (#320)
 
 ## [1.6.6] - 2026-11-17
 
