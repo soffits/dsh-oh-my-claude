@@ -6654,25 +6654,6 @@ console.log("interrupt-on-abort ok");
   console.log("wake reconnects first ok");
 }
 
-// The reconnect asks `mcp_status` first; these fakes report the `dsh` server dropped, so every
-// try goes on to `mcp_reconnect`, which is what `written` counts.
-const statusAnswered = (proc: any, line: string, status = "failed"): boolean => {
-  const r = JSON.parse(line);
-  if (r.request?.subtype !== "mcp_status") return false;
-  setTimeout(() => {
-    proc.controlListener({
-      type: "control_response",
-      request_id: r.request_id,
-      response: {
-        subtype: "success",
-        request_id: r.request_id,
-        response: { mcpServers: [{ name: "dsh", status }] },
-      },
-    });
-  }, 0);
-  return true;
-};
-
 // reconnectBridge: with the bridge mounted, a reattached process is told mcp_reconnect for the
 // `dsh` server; without a bridge nothing is sent.
 {
@@ -6683,7 +6664,6 @@ const statusAnswered = (proc: any, line: string, status = "failed"): boolean => 
     busy: false,
     controlListener: undefined,
     write(line: string) {
-      if (statusAnswered(proc, line)) return true;
       written.push(line);
       const req = JSON.parse(line);
       setTimeout(() => {
@@ -6702,14 +6682,13 @@ const statusAnswered = (proc: any, line: string, status = "failed"): boolean => 
   };
   assert.equal(await adapter.reconnectBridge(proc, "s"), false, "no bridge: nothing sent");
   assert.equal(written.length, 0);
-  (adapter as any).mcp = { url: "http://x", key: "k", toolsFor: () => [] };
+  (adapter as any).mcp = { url: "http://x", key: "k", toolsFor: () => [], openCalls: () => 0 };
   assert.equal(await adapter.reconnectBridge(proc, "s"), true);
   const req = JSON.parse(written[0]!).request;
   assert.deepEqual(req, { subtype: "mcp_reconnect", serverName: "dsh" });
   // The bridge is not listening yet for the first two tries: keep asking, succeed on the third.
   let failures = 2;
   proc.write = (line: string) => {
-    if (statusAnswered(proc, line)) return true;
     written.push(line);
     const r = JSON.parse(line);
     const fail = failures-- > 0;
@@ -6758,7 +6737,6 @@ const statusAnswered = (proc: any, line: string, status = "failed"): boolean => 
     busy: false,
     controlListener: undefined,
     write(line: string) {
-      if (statusAnswered(proc, line)) return true;
       written.push(line);
       const r = JSON.parse(line);
       setTimeout(() => {
@@ -6774,7 +6752,7 @@ const statusAnswered = (proc: any, line: string, status = "failed"): boolean => 
   let mount!: () => void;
   adapter.mcpMounting = new Promise<void>((resolve) => {
     mount = () => {
-      (adapter as any).mcp = { url: "http://x", key: "k", toolsFor: () => [] };
+      (adapter as any).mcp = { url: "http://x", key: "k", toolsFor: () => [], openCalls: () => 0 };
       resolve();
     };
   });
@@ -6797,7 +6775,7 @@ const statusAnswered = (proc: any, line: string, status = "failed"): boolean => 
   assert.equal(await adapter.reconnectBridge(proc, "s", 1, 2), false);
   assert.equal(written.length, 0);
   assert.equal(proc.bridgeStale, true, "an unmounted bridge is left for the next turn");
-  (adapter as any).mcp = { url: "http://x", key: "k", toolsFor: () => [] };
+  (adapter as any).mcp = { url: "http://x", key: "k", toolsFor: () => [], openCalls: () => 0 };
   await adapter.reconnectIfStale(proc, "s");
   assert.equal(written.length, 1, "the turn boundary reconnects");
   assert.equal(proc.bridgeStale, false);
@@ -6808,7 +6786,7 @@ const statusAnswered = (proc: any, line: string, status = "failed"): boolean => 
 // the session until this turn) reconnects before its prompt, and the background retries then stop.
 {
   const adapter = new ClaudeCodeAdapter(fakeCtx({ on() {} }), Config({}));
-  (adapter as any).mcp = { url: "http://x", key: "k", toolsFor: () => [] };
+  (adapter as any).mcp = { url: "http://x", key: "k", toolsFor: () => [], openCalls: () => 0 };
   let agentLive = false;
   const written: string[] = [];
   const proc: any = {
@@ -6817,7 +6795,6 @@ const statusAnswered = (proc: any, line: string, status = "failed"): boolean => 
     bridgeStale: false,
     controlListener: undefined,
     write(line: string) {
-      if (statusAnswered(proc, line)) return true;
       written.push(line);
       const r = JSON.parse(line);
       const ok = agentLive;
@@ -6846,22 +6823,21 @@ const statusAnswered = (proc: any, line: string, status = "failed"): boolean => 
   console.log("mcp-reconnect owed while retrying ok");
 }
 
-// After a restart the bridge holds the calls of a process dsh has no agent for, so its `dsh`
-// server usually comes through connected, maybe with a call of the cut turn still in flight. The
-// reconnect asks first and leaves a connected server alone: a reconnect would close that
-// connection and fail the call the bridge was holding for the resumed turn.
+// After a restart the bridge holds the calls of a process dsh has no agent for, so a call of the
+// cut turn is often still open when the agent comes back. A reconnect would close the connection
+// and fail it, so while the bridge has a call of the session open the reconnect stays owed to the
+// next prompt, which makes it (refreshing the tool list) once nothing is open.
 {
   const adapter = new ClaudeCodeAdapter(fakeCtx({ on() {} }), Config({}));
-  (adapter as any).mcp = { url: "http://x", key: "k", toolsFor: () => [] };
+  let open = 1;
+  (adapter as any).mcp = { url: "http://x", key: "k", toolsFor: () => [], openCalls: () => open };
   const reconnects: string[] = [];
-  let status = "connected";
   const proc: any = {
     alive: true,
     busy: false,
     bridgeStale: false,
     controlListener: undefined,
     write(line: string) {
-      if (statusAnswered(proc, line, status)) return true;
       reconnects.push(line);
       const r = JSON.parse(line);
       setTimeout(() => {
@@ -6875,12 +6851,15 @@ const statusAnswered = (proc: any, line: string, status = "failed"): boolean => 
     },
   };
   assert.equal(await adapter.reconnectBridge(proc, "s", 1, 3), true);
-  assert.equal(reconnects.length, 0, "a connected dsh server gets no mcp_reconnect");
-  assert.equal(proc.bridgeStale, false, "and nothing stays owed to the next turn");
-  status = "failed";
-  assert.equal(await adapter.reconnectBridge(proc, "s", 1, 3), true);
-  assert.equal(reconnects.length, 1, "a dropped one is reconnected");
-  console.log("mcp-reconnect leaves a connected server alone ok");
+  assert.equal(reconnects.length, 0, "an open call gets no mcp_reconnect under it");
+  assert.equal(proc.bridgeStale, true, "the reconnect stays owed to the next prompt");
+  await adapter.reconnectIfStale(proc, "s");
+  assert.equal(reconnects.length, 0, "still nothing while the call is open");
+  open = 0;
+  await adapter.reconnectIfStale(proc, "s");
+  assert.equal(reconnects.length, 1, "once nothing is open the owed reconnect is made");
+  assert.equal(proc.bridgeStale, false);
+  console.log("mcp-reconnect waits out open calls ok");
 }
 
 // A reconnect sent while dsh has no live agent for the session gets the bridge's 404, and Claude
@@ -6893,6 +6872,7 @@ const statusAnswered = (proc: any, line: string, status = "failed"): boolean => 
     url: "http://x",
     key: "k",
     toolsFor: () => (agentLive ? [] : undefined),
+    openCalls: () => 0,
   };
   const written: string[] = [];
   const proc: any = {
@@ -6901,7 +6881,6 @@ const statusAnswered = (proc: any, line: string, status = "failed"): boolean => 
     bridgeStale: false,
     controlListener: undefined,
     write(line: string) {
-      if (statusAnswered(proc, line)) return true;
       written.push(line);
       const r = JSON.parse(line);
       const ok = agentLive;
@@ -10577,7 +10556,13 @@ console.log("watch-save-race ok");
   );
   a.stateDir = joinPath(tmpdir(), "omc-flush-test-nowrite");
   // A mounted bridge is what turns relaying on.
-  (a as any).mcp = { base: "http://127.0.0.1:1", key: "k", via: "webserver", toolsFor: () => [] };
+  (a as any).mcp = {
+    base: "http://127.0.0.1:1",
+    key: "k",
+    via: "webserver",
+    toolsFor: () => [],
+    openCalls: () => 0,
+  };
   const queue: Array<unknown> = [
     {
       type: "assistant",
@@ -10657,7 +10642,13 @@ console.log("watch-save-race ok");
     Config({ resume: true, toolActivity: true, toolsInline: false, dshTools: true }),
   );
   a.stateDir = joinPath(tmpdir(), "omc-flush-test-nowrite");
-  (a as any).mcp = { base: "http://127.0.0.1:1", key: "k", via: "webserver", toolsFor: () => [] };
+  (a as any).mcp = {
+    base: "http://127.0.0.1:1",
+    key: "k",
+    via: "webserver",
+    toolsFor: () => [],
+    openCalls: () => 0,
+  };
   const frame = (event: object) => ({ type: "stream_event", event });
   const relay = (id: string, name: string, toolUseId: string) => ({
     type: "dsh_relay",
@@ -10793,7 +10784,13 @@ console.log("watch-save-race ok");
     Config({ resume: true, toolActivity: true, toolsInline: false, dshTools: true }),
   );
   a.stateDir = joinPath(tmpdir(), "omc-flush-test-nowrite");
-  (a as any).mcp = { base: "http://127.0.0.1:1", key: "k", via: "webserver", toolsFor: () => [] };
+  (a as any).mcp = {
+    base: "http://127.0.0.1:1",
+    key: "k",
+    via: "webserver",
+    toolsFor: () => [],
+    openCalls: () => 0,
+  };
   const rejected: string[] = [];
   let relayTaken = false;
   const queue: Array<any> = [
@@ -10909,7 +10906,13 @@ for (const [outcome, behavior, message] of [
     Config({ resume: true, toolActivity: true, toolsInline: false, dshTools: true }),
   );
   a.stateDir = joinPath(tmpdir(), "omc-flush-test-nowrite");
-  (a as any).mcp = { base: "http://127.0.0.1:1", key: "k", via: "webserver", toolsFor: () => [] };
+  (a as any).mcp = {
+    base: "http://127.0.0.1:1",
+    key: "k",
+    via: "webserver",
+    toolsFor: () => [],
+    openCalls: () => 0,
+  };
   const queue: Array<unknown> = [
     {
       type: "assistant",
@@ -11037,7 +11040,13 @@ console.log("approval beside relay ok");
     Config({ resume: true, toolActivity: true, toolsInline: false, dshTools: true }),
   );
   a.stateDir = joinPath(tmpdir(), "omc-flush-test-nowrite");
-  (a as any).mcp = { base: "http://127.0.0.1:1", key: "k", via: "webserver", toolsFor: () => [] };
+  (a as any).mcp = {
+    base: "http://127.0.0.1:1",
+    key: "k",
+    via: "webserver",
+    toolsFor: () => [],
+    openCalls: () => 0,
+  };
   const ask = (requestId: string, toolUseId: string) => ({
     type: "control_request",
     request_id: requestId,
@@ -11175,7 +11184,13 @@ console.log("approval beside relay ok");
     Config({ resume: true, toolActivity: true, toolsInline: false, dshTools: true }),
   );
   a.stateDir = joinPath(tmpdir(), "omc-flush-test-nowrite");
-  (a as any).mcp = { base: "http://127.0.0.1:1", key: "k", via: "webserver", toolsFor: () => [] };
+  (a as any).mcp = {
+    base: "http://127.0.0.1:1",
+    key: "k",
+    via: "webserver",
+    toolsFor: () => [],
+    openCalls: () => 0,
+  };
   const input = {
     questions: [{ question: "Pick a colour?", options: [{ label: "Blue" }] }],
     afkTimeoutMs: 60_000,
@@ -11294,7 +11309,13 @@ console.log("approval beside relay ok");
     Config({ resume: true, toolActivity: true, toolsInline: false, dshTools: true }),
   );
   a.stateDir = joinPath(tmpdir(), "omc-flush-test-nowrite");
-  (a as any).mcp = { base: "http://127.0.0.1:1", key: "k", via: "webserver", toolsFor: () => [] };
+  (a as any).mcp = {
+    base: "http://127.0.0.1:1",
+    key: "k",
+    via: "webserver",
+    toolsFor: () => [],
+    openCalls: () => 0,
+  };
   const rejected: string[] = [];
   const queue: Array<unknown> = [
     {

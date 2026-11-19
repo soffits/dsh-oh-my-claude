@@ -8,7 +8,6 @@ Versions from 1.0.0 up are on npm. Everything below 1.0.0 was released from the 
 
 ### Fixed
 
-- A Claude process that keeps working through a dsh restart no longer burns its turn on refused dsh calls. Until the restart resumer continued its turn, dsh had no agent for the session and the bridge answered every call with "no live agent for session", so the model retried a few times and ended the turn reporting that its tools were gone. The bridge now holds such a call (from a session whose Claude process this plugin still runs) until dsh has the agent again, for up to three minutes, and the post-restart reconnect leaves a `dsh` server that is still connected alone, so it no longer cuts the held call.
 - The plan usage no longer shows up in other plugins' popovers. The context ring was found by any dialog button whose icon had two circles, so a media player's settings button got the usage block; the ring is now the one whose arc carries the meter's dash array.
 
 ### Changed
@@ -27,6 +26,7 @@ dsh: runs on 0.2.2-alpha.2 through 0.2.2-rc.5; built and tested on 0.2.2-rc.5.
 
 ### Fixed
 
+- A Claude process that keeps working through a dsh restart no longer burns its turn on refused dsh calls. Until its turn was continued, dsh had no agent for the session and the bridge answered every call with "no live agent for session", so the model retried a few times and ended the turn reporting that its tools were gone. The bridge now holds such a call (from a session whose Claude process this plugin still runs) until dsh has the agent again, for up to three minutes, and the post-restart reconnect waits while the bridge has a call of the session open, so it no longer cuts the held call. A session dsh never brings back waits once; its later calls are refused at once. Thanks to @soffits (#323)
 - A restart no longer wakes a session whose turn had already ended. When the plugin reattached to a Claude process that kept running, a finished background job queued in it was enough to send the "dsh restarted and reattached ... Continue where you are" notice, and a subagent its parent had interrupted went back to the task it was told to drop. Only a turn that was still running when dsh went down is resumed now; after a Stop, an abort or a finished turn the session stays attached and is not told to continue. A reply Claude finished on its own while dsh was away still shows, under the background-task notice, and a turn still running when dsh went down is woken even when its Claude is reattached late. Thanks to @soffits (#321)
 - A restart no longer throws away what a reattached Claude wrote while dsh was away when anything in its start settings had changed (an instructions file edit is enough). The turn that exists to show that output replaced the process first, so the reply was lost and the turn came out blank; it now keeps the process and the next prompt replaces it. Thanks to @soffits (#321)
 

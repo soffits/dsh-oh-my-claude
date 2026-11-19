@@ -1237,16 +1237,14 @@ export declare class ClaudeCodeAdapter extends LlmAdapter {
      * (non-default instance) has nothing to reconnect to; on the default one a bridge still mounting
      * is waited for. The reconnect is sent only while dsh has a live agent for the session: before
      * that the bridge answers 404, and a failed `mcp_reconnect` turns a server that was still
-     * connected into a failed one that stays failed. A server the process still reports connected is
-     * left alone: the bridge holds calls until the agent is back, so the server usually survives
-     * the restart, and a reconnect would fail the cut turn's call in flight. Looks every retryMs for
-     * attempts tries, then leaves it owed (`bridgeStale`) to the next turn, which is when an agent
-     * exists; a turn that starts while these retries still run reconnects before its prompt.
+     * connected into a failed one that stays failed. While the bridge has a call of the session open
+     * (it holds calls until the agent is back, so after a restart the cut turn's call often still
+     * is), the reconnect waits: it would close the connection and fail that call. Looks every
+     * retryMs for attempts tries, then leaves it owed (`bridgeStale`) to the next turn, which is
+     * when an agent exists; a turn that starts while these retries still run reconnects before its
+     * prompt. True once reconnected, or when a call left open shows the server is talking to us.
      */
     reconnectBridge(proc: ClaudeProcess, sessionId: string, retryMs?: number, attempts?: number): Promise<boolean>;
-    /** Whether the process reports its `dsh` server connected (`mcp_status`); false when it says
-     *  otherwise or does not answer. */
-    dshConnected(proc: ClaudeProcess): Promise<boolean>;
     /** An owed reconnect is made at a turn boundary, when dsh does have the agent. */
     reconnectIfStale(proc: ClaudeProcess, sessionId: string): Promise<void>;
     /** The box a session's turn runs on (an SSH box, or a remote workspace's host), or undefined for a
