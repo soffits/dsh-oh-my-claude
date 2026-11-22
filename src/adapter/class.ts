@@ -163,7 +163,7 @@ import {
 import { suggestRule } from "../permissions.js";
 import { currentLogVersion, type ToolMode, type ToolModeInfo } from "../rows-probe.js";
 import { readSshToken, THIS_BOX } from "../ssh-login.js";
-import { CHILD_ENV, childEnv, errorText } from "../process.js";
+import { CHILD_ENV, SECURE_STORAGE_ENV, childEnv, errorText } from "../process.js";
 import {
   KEEPER_OFF,
   ORPHAN_FLOOR_MS,
@@ -194,7 +194,7 @@ import {
   sshRunner,
   type HoldRecord,
 } from "../hold.js";
-import { dropHold, loadHolds, saveHold } from "../state.js";
+import { dropHold, isCliHome, loadHolds, saveHold, secureStorageDir } from "../state.js";
 import { knownRefusal } from "../session-repair.js";
 import { healLog, rawLogPath, type HealHost } from "../session-heal.js";
 import { forkTranscriptText } from "../transcript.js";
@@ -371,6 +371,7 @@ import {
   renameTitle,
   rowsSupported,
   supports,
+  cleanTitle,
   titleInput,
   unknownFlagIn,
   usesStdin,
@@ -4193,8 +4194,18 @@ export class ClaudeCodeAdapter extends LlmAdapter {
     isolate = this.config.isolate,
   ): Record<string, string> | undefined {
     const over: Record<string, string> = {};
-    if (this.config.configDir || this.config.ownTranscripts)
+    // Only a dir the CLI would not pick by itself (cliEnvFor's rule). Handed even `~/.claude`, the
+    // CLI looks for its macOS Keychain login under `Claude Code-credentials-<hash>`, misses the
+    // plain entry `claude auth login` wrote, and every turn ends "Not logged in" while Boxes,
+    // reading the plain entry, shows the box logged in (#328).
+    if ((this.config.configDir || this.config.ownTranscripts) && !isCliHome(this.claudeHome)) {
       over.CLAUDE_CONFIG_DIR = this.claudeHome;
+      // The mirror links the real dir's files, but a Keychain login has no file to link: point
+      // the CLI's credential store back at the real dir. Its token refreshes land there too,
+      // where a write through the mirror would replace the link with a copy.
+      if (this.claudeHome !== this.realClaudeHome)
+        over[SECURE_STORAGE_ENV] = secureStorageDir(this.realClaudeHome);
+    }
     const token = this.providerId === "claude-code" ? readSshToken(STATE_DIR, THIS_BOX) : undefined;
     // Not to a router: the token is the Claude account's, and an endpoint that is not Anthropic
     // has no business holding it. The CLI falls back to whatever the router's settings give it.
@@ -4907,6 +4918,27 @@ export class ClaudeCodeAdapter extends LlmAdapter {
     this.streaming.clear();
   }
 
+  /**
+   * The one-shot title call, its answer passed through `cleanTitle` before dsh takes the first
+   * line of it. The answer is held until the call finishes and goes out as one text block, so
+   * every block chunk of the call itself (text and reasoning alike) is dropped, which keeps the
+   * new block's index from colliding with one already sent. Other chunks (usage) and the finish
+   * pass through; a call that fails sends its finish and no text.
+   */
+  async *titleOneShot(options: GenerateOptions): AsyncGenerator<StreamChunk> {
+    let text = "";
+    for await (const c of this.oneShot(options)) {
+      if (c.type === "text-delta") text += c.text;
+      else if (c.type === "finish") {
+        const failed = c.reason.kind === "error" || c.reason.kind === "aborted";
+        const title = failed ? "" : cleanTitle(text);
+        if (title) yield* new Translator({ toolActivity: false }).wholeBlock("text", title);
+        yield c;
+        return;
+      } else if (!("index" in c)) yield c;
+    }
+  }
+
   /** The stream entry point: answer a session-title request directly, run a one-shot when there is no resume path, otherwise delegate to the persistent turn loop. */
   async *stream(options: GenerateOptions): AsyncGenerator<StreamChunk> {
     if (options.purpose === "session-title" && options.sessionId) {
@@ -4916,6 +4948,10 @@ export class ClaudeCodeAdapter extends LlmAdapter {
         yield { type: "finish", reason: { kind: "stop" } };
         return;
       }
+    }
+    if (options.purpose === "session-title") {
+      yield* this.titleOneShot(options);
+      return;
     }
     if (options.purpose === "compaction" && options.sessionId) {
       const summary = await this.compactionFromCli(options.sessionId, options.signal);
