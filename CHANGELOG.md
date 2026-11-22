@@ -6,6 +6,20 @@ Versions from 1.0.0 up are on npm. Everything below 1.0.0 was released from the 
 
 ## [Unreleased]
 
+### Fixed
+
+- With a plugin that puts its own login in front of every dsh route, such as @xgone/dsh-remote, Claude sessions got none of dsh's tools: the CLI's MCP client carries no login cookie, so the gate answered the bridge with 403 and Claude Code listed the `dsh` server as needing authentication. Once dsh's web server is up, the bridge now checks that its own route answers, and when something else answers instead it serves new Claude sessions from its own 127.0.0.1 port, as it already did under DSH Desktop. A dsh with no such gate keeps the web server route. Thanks to @msyzzm (#338)
+- A session could be named after raw JSON such as `{"title":"..."}` or just "```json" when its title came from the quick one-shot title call, which runs while the session's Claude is still starting. That call now unwraps a JSON answer or a code fence before dsh takes the first line as the name.
+
+## [1.6.10] - 2026-11-21
+
+dsh: runs on 0.2.2-alpha.2 through 0.2.2-rc.5; built and tested on 0.2.2-rc.5.
+
+### Fixed
+
+- On a dsh whose web server checks logins itself (current dsh master, which removed `connection.requestRejection`), the switches on the Oh My Claude card in Settings flipped back as soon as they were clicked, the usage, status, accounts and changelog panels stayed empty, and Claude sessions under plain `dsh web` could not reach dsh's tools. Every plugin route answered an empty 400 and the MCP bridge a 401. The routes now leave the login check to dsh when it does it, and still make it themselves on an older dsh. The MCP bridge route tells dsh it needs no login cookie, since the CLI has none; its own key and dsh's host check still guard it. Thanks to @fancn (#334)
+- A mount configured with `configDir: ~/.claude`, the default dir written out, failed every turn on macOS with "Claude Code is not logged in" while Boxes showed it logged in. Handed that dir, Claude Code looks for its login under a Keychain name of its own and misses the one `claude auth login` saved. The plugin now hands Claude Code a config dir only when it is not the default, as its own Settings calls already did, so its sessions now read MCP servers and project trust from `~/.claude.json`, as a terminal does; a server added from inside such a session before this fix is in `~/.claude/.claude.json` and needs adding again. With `ownTranscripts` on, sessions on macOS now find the login too. Thanks to @taseenb (#328)
+
 ## [1.6.9] - 2026-11-20
 
 dsh: runs on 0.2.2-alpha.2 through 0.2.2-rc.5; built and tested on 0.2.2-rc.5.
