@@ -170,6 +170,7 @@ import {
 import { readAccounts } from "./routes/accounts.js";
 import { ClaudeCodeAdapter } from "./adapter/class.js";
 import { uiPartsOf } from "./adapter/ui-parts.js";
+import { opinions } from "./adapter/second-opinion.js";
 // The entry keeps its export list while the split runs.
 export { ClaudeCodeAdapter } from "./adapter/class.js";
 
@@ -199,6 +200,7 @@ export function apply(ctx: PluginContext, config: Schemastery.TypeT<typeof Confi
     },
   ]);
   adapter.registration = ctx.llm.registerAdapter([adapter.providerId], adapter);
+  void opinions.prime();
   probeLogin(adapter);
   // dsh drops a session's Agent out of `ctx.agents` after a few idle minutes; the controller's
   // resolveAgent() cold-resumes it, which is what a wake after a long idle needs.

@@ -47,6 +47,7 @@ import {
   settingsEnvAt,
 } from "../sessions.js";
 import { hub, type OmcEvent } from "../events.js";
+import { gateHookFor } from "./test-gate.js";
 import { managedDir } from "../instructions.js";
 import { readUsage, stillLimitedUntil } from "../usage.js";
 import { MCP_PATH, type McpBridge } from "../mcp.js";
@@ -87,6 +88,7 @@ import {
   nodeSpawner,
   seamSpawner,
   sshSpawner,
+  farTokenLine,
   attachKeeper,
   keeperHolder,
   launchKeeper,
@@ -163,7 +165,7 @@ import {
 import { suggestRule } from "../permissions.js";
 import { currentLogVersion, type ToolMode, type ToolModeInfo } from "../rows-probe.js";
 import { readSshToken, THIS_BOX } from "../ssh-login.js";
-import { CHILD_ENV, SECURE_STORAGE_ENV, childEnv, errorText } from "../process.js";
+import { CHILD_ENV, SECURE_STORAGE_ENV, childEnv, errorText, windowEnvPairs } from "../process.js";
 import {
   KEEPER_OFF,
   ORPHAN_FLOOR_MS,
@@ -183,7 +185,17 @@ import {
   mirrorReplyBlocks,
   alreadyShown,
 } from "../transcript.js";
-import { copyToAt, homeAt, readFromAt, sizeAt, spliceAt, type FsBox } from "../remote-fs.js";
+import {
+  copyToAt,
+  homeAt,
+  readFromAt,
+  readTextAt,
+  sizeAt,
+  spliceAt,
+  type FsBox,
+} from "../remote-fs.js";
+import { checkoutRoot } from "../repo.js";
+import { NEW_FILE_MAX_BYTES, opinions, requestText, type TurnDeps } from "./second-opinion.js";
 import {
   READY as READY_MARK,
   asHoldRecord,
@@ -351,7 +363,7 @@ import {
   steerKey,
   textOf,
 } from "./prompt.js";
-import { seedTranscriptText } from "./seed.js";
+import { pruneReplaced, seedTranscriptText } from "./seed.js";
 import { busyEnterOf, CommandRows, commandNameOf, leavesQueue, lineReceipt } from "./lane.js";
 import {
   accessModeOf,
@@ -436,7 +448,17 @@ import {
   WATCH_LOOKBACK_BYTES,
 } from "./turn.js";
 import { subagentLinkOf } from "./wake-subagent.js";
+import { Notifier, type NotifyEvent } from "./notify.js";
 import { announcementOf } from "./seed.js";
+
+/** The box's one phone notifier. Module-level so every mount in this process shares its timers: a
+ *  session holds at most one pending notice whichever mount runs it. A plugin reload leaves the old
+ *  module's pending timers to fire once from the old code; they are unref'd and send at most one
+ *  notice each. */
+const notifier = new Notifier({
+  dir: STATE_DIR,
+  hints: () => readHints(join(STATE_DIR, "hints.json")),
+});
 
 /** The LlmAdapter that drives the logged-in Claude Code CLI: it owns the live `claude` processes, bridges dsh's commands and routes into them, and mirrors their transcript back into dsh. */
 export class ClaudeCodeAdapter extends LlmAdapter {
@@ -798,6 +820,7 @@ export class ClaudeCodeAdapter extends LlmAdapter {
         const uuid = randomUUID();
         if (proc.write(buildInput(text, [], uuid, this.composedFor(session?.id, text)))) {
           proc.sent.add(key);
+          if (session?.id) notifier.cancel(session.id);
           proc.steerPending = true;
           proc.forwarded += 1;
           record({ uuid, key, text, at: Date.now() });
@@ -1651,6 +1674,8 @@ export class ClaudeCodeAdapter extends LlmAdapter {
         if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) throw error;
       }
       await writeFile(dest, text);
+      // Each rebuild moves one copy aside; without this they piled up for good.
+      await pruneReplaced(dest);
     } catch (error) {
       this.log("warn", `seeding claude session ${id} from dsh's log failed: ${errorText(error)}`);
       return false;
@@ -1880,6 +1905,21 @@ export class ClaudeCodeAdapter extends LlmAdapter {
       options.purpose || !options.sessionId || ownCompact
         ? undefined
         : await this.cliCompactAt(options.sessionId, options.model);
+    // The test gate: a local workspace with the gate on in Settings, on a session's own turn. The
+    // hook script runs on this box, so a box or a remote workspace never gets it, and neither does
+    // a dsh subagent's session: it shares the parent's tree, and every child stop would run the
+    // whole suite beside the parent's.
+    let subagent = false;
+    try {
+      if (options.sessionId)
+        subagent = this.ctx.sessions.get(options.sessionId)?.header?.origin === "subagent";
+    } catch {
+      // a session dsh cannot hand back is read as a top-level one: gated if the workspace is
+    }
+    const testGate =
+      options.purpose || subagent || this.config.sshHost || remoteWorkspaceFor(cwd)
+        ? undefined
+        : await gateHookFor(STATE_DIR, cwd, options.sessionId, this.config.idleTimeoutMs);
     const args = buildArgs({
       ...options,
       model,
@@ -1893,6 +1933,7 @@ export class ClaudeCodeAdapter extends LlmAdapter {
       mcp: mcpBridge,
       dshSystem,
       compactPct,
+      testGate,
     });
     // Spec = what a running process was spawned with. `resuming` is deliberately left out: it flips
     // to true after the first turn and must not force a respawn.
@@ -1913,6 +1954,9 @@ export class ClaudeCodeAdapter extends LlmAdapter {
     if (engine !== undefined) spec.engine = engine;
     // Its environment is fixed at spawn, so isolate rides on the spec the spawner reads.
     if (engineConfig.isolate) spec.isolate = true;
+    // The hook list is fixed at spawn too: a gate switched on or off replaces the process on the
+    // session's next turn, which resumes the conversation.
+    if (testGate) spec.testGate = true;
     // An environment is fixed at spawn, so the switch joins the spec: a session already running
     // when it flips is replaced on its next turn and resumes with the window the switch gives.
     // Local spawns only; the flag does not ride to a box, whose own environment decides.
@@ -2825,6 +2869,14 @@ export class ClaudeCodeAdapter extends LlmAdapter {
    * the mirror documents as starting a turn. A dsh without `cancel` (0.1.6 and earlier) gets the
    * steers put back untouched and a refusal that says so. A relay pending refuses with `relayed`:
    * the tool cannot be cut short without killing the CLI.
+   *
+   * Claude Code's own send-now over stdin is not used, on purpose. `update_queued_message` with
+   * `priority: "now"` (2.1.331) answers `unsupported_request` unless the server turns its flag on,
+   * and it, the interrupt's `send_now`, and a plain interrupt all end the turn and answer the
+   * waiting message in a turn the CLI starts itself (probed on 2.1.332, 2026-11-25). dsh never
+   * opened that turn: its answer shows only after it ends, through `wake`, and a dsh tool called
+   * inside it is declined. Switch only once such a turn can be adopted into a dsh turn as it
+   * starts.
    */
   async sendSteerNow(sessionId: string, ids: string[]): Promise<SteerEditReply> {
     // Inside a dsh tool the cut would abort the tool, reject the relay and kill the CLI on the next
@@ -3106,6 +3158,7 @@ export class ClaudeCodeAdapter extends LlmAdapter {
     const reply = await this.control(proc, { subtype: "mcp_authenticate", serverName }, 20_000);
     if (!reply.ok) return { ok: false, error: reply.error };
     const url = mcpAuthUrl(reply.response);
+    if (url === null) return { ok: false, error: serverText("mcpAuthUrlRefused") };
     if (url !== undefined) return { ok: true, authUrl: url };
     if (mcpAuthNeedsNothing(reply.response)) return { ok: true };
     return { ok: false, error: "the CLI answered without a sign-in page" };
@@ -3354,6 +3407,7 @@ export class ClaudeCodeAdapter extends LlmAdapter {
     if (sessionId === null) return out;
     out.push({ kind: "live-turn", session: sessionId, data: this.liveTurnReply(sessionId) });
     out.push({ kind: "asides", session: sessionId, data: this.asidesReply(sessionId) });
+    out.push({ kind: "second-opinion", session: sessionId, data: opinions.reply(sessionId) });
     out.push({ kind: "idle", session: sessionId, data: this.idleReply(sessionId) });
     out.push({ kind: "turns", session: sessionId, data: this.turnsReply(sessionId) });
     out.push({
@@ -3371,6 +3425,31 @@ export class ClaudeCodeAdapter extends LlmAdapter {
     // A dialog opening or closing changes what `idleReply` answers for its session.
     for (const key of this.idleTargets.keys()) this.publishIdle(key);
     hub.publish({ kind: "awaiting", session: null, data: this.awaitingAll() });
+  }
+
+  /** Hand a finished turn or an open prompt to the phone notifier, which sends it after the box's
+   *  delay unless the prompt with `requestId` was answered, or a prompt or steer went to the session,
+   *  by then. Does nothing while phone notices are off; the notifier reads the switch itself. */
+  private notifyLater(
+    sessionId: string,
+    event: Exclude<NotifyEvent, "test">,
+    requestId?: string,
+    tool?: string,
+  ): void {
+    if (!sessionId) return;
+    notifier.schedule({
+      sessionId,
+      event,
+      tool,
+      still: () => requestId === undefined || this.awaitingInput.get(sessionId)?.id === requestId,
+      title: () => {
+        const titles = this.ctx?.get?.("sessionTitle");
+        const session = this.ctx?.sessions?.get?.(asSessionId(sessionId));
+        return titles && session ? titles.get(session)?.title : undefined;
+      },
+      isChild: async () => (await this.subagentLink(sessionId)) !== undefined,
+      log: (level, msg) => this.log(level, msg),
+    });
   }
 
   /** The asides body for one session to its streams, read from the session's mount. A publish
@@ -3397,11 +3476,34 @@ export class ClaudeCodeAdapter extends LlmAdapter {
     });
   }
 
+  /** What a second opinion reads for one session: the CLI's diff, a new file's text on the session's
+   *  box under the checkout root (the diff names paths relative to it, not to the cwd; asked only
+   *  when a new file is read), and dsh's model service. */
+  private opinionDeps(sessionId: string): TurnDeps {
+    const cwd = this.sessionCwd(sessionId) ?? process.cwd();
+    const ws = remoteWorkspaceFor(cwd);
+    const box: FsBox = { sshHost: boxFor(this.config.sshHost, ws?.host) };
+    let root: Promise<string> | undefined;
+    return {
+      // 60 s, not the Changes tab's 10: the first turn after a spawn waits on MCP servers loading.
+      diff: () => this.workspaceDiff(sessionId, 60_000),
+      read: async (path) => {
+        const at = join(await (root ??= checkoutRoot(box, ws?.remoteCwd ?? cwd)), path);
+        const bytes = await sizeAt(box, at);
+        if (bytes === null || bytes > NEW_FILE_MAX_BYTES) return null;
+        const text = await readTextAt(box, at);
+        // A NUL byte means a binary file the CLI did not flag; it is named, not sent.
+        return text?.includes("\u0000") ? null : text;
+      },
+      llm: this.ctx.llm,
+    };
+  }
+
   /** The CLI's working-tree diff (`get_workspace_diff`) for a session with a live process. */
-  async workspaceDiff(sessionId: string): Promise<WorkspaceDiffReply> {
+  async workspaceDiff(sessionId: string, timeoutMs = 10_000): Promise<WorkspaceDiffReply> {
     const proc = this.processes.get(registryKey(this.providerId, sessionId));
     if (!proc?.alive) return { ok: false, error: "no live Claude process for this session" };
-    const reply = await this.control(proc, { subtype: "get_workspace_diff" }, 10_000);
+    const reply = await this.control(proc, { subtype: "get_workspace_diff" }, timeoutMs);
     if (!reply.ok) return { ok: false, error: reply.error };
     return { ok: true, ...decodeWorkspaceDiff(reply.response) };
   }
@@ -4226,10 +4328,9 @@ export class ClaudeCodeAdapter extends LlmAdapter {
     // knows. Measured on 2.1.322 with `get_context_usage`: `sonnet` behind a router reads
     // 1,000,000 with neither, and the number given with the second; an unknown id reads 200,000
     // with neither and the number given with the first.
-    if (window !== undefined) {
-      over.CLAUDE_CODE_MAX_CONTEXT_TOKENS = String(window);
-      over.CLAUDE_CODE_AUTO_COMPACT_WINDOW = String(window);
-    }
+    // A stated 200K or smaller also turns off the CLI's 1M guess for ids it does not know
+    // (`windowEnvPairs`).
+    Object.assign(over, Object.fromEntries(windowEnvPairs(window)));
     if (isolate) Object.assign(over, ISOLATED_ENV);
     return Object.keys(over).length === 0 ? undefined : over;
   }
@@ -4326,13 +4427,12 @@ export class ClaudeCodeAdapter extends LlmAdapter {
       startedAt: Date.now(),
     };
     if (this.keeperOwner) record.owner = this.keeperOwner;
+    const far = this.farEnv(host, spec.routed, spec.window);
     const started = new Promise<SubprocessHandle>((resolve, reject) => {
-      const s = run(
-        holdStartScript(holdId, cwd, command, args, this.farEnv(host, spec.routed, spec.window)),
-      );
+      const s = run(holdStartScript(holdId, cwd, command, args, far));
       let out = "";
       let err = "";
-      s.stdin.end();
+      s.stdin.end(farTokenLine(far));
       s.stdout.on("data", (d) => (out += String(d)));
       s.stderr.on("data", (d) => (err += String(d)));
       void s.done.then((o) => {
@@ -5655,6 +5755,11 @@ export class ClaudeCodeAdapter extends LlmAdapter {
    */
   forgetSession(sessionId: string) {
     this.sessionTools.delete(sessionId);
+    // Safe to drop with the process: the next turn's `prepare` records the config again before
+    // anything reads it, and a new process reports its own commands; until it does, any `/name`
+    // goes as a command, as on a session's first process.
+    this.sessionCommands.delete(sessionId);
+    this.sessionConfigs.delete(sessionId);
     this.sessionPluginErrors.delete(sessionId);
     this.sessionPluginWarnings.delete(sessionId);
     this.sessionTasks.delete(sessionId);
@@ -5786,6 +5891,7 @@ export class ClaudeCodeAdapter extends LlmAdapter {
     if (!proc.write(buildInput(body, images, uuid, this.composedFor(options.sessionId, body))))
       return false;
     proc.sent.add(key);
+    notifier.cancel(options.sessionId);
     return true;
   }
 
@@ -5865,9 +5971,17 @@ export class ClaudeCodeAdapter extends LlmAdapter {
     // Before the prompt, like initialize: a rename typed into dsh since the last turn reaches
     // the CLI ahead of the turn it names.
     this.syncTitleToCli(proc, cont.options.sessionId);
+    // The second opinion's before-snapshot: its control request is written here, ahead of the
+    // prompt, so the CLI answers it against the tree as the turn found it. Not awaited.
+    opinions.turnStarting(
+      cont.options.sessionId,
+      requestText(cont.options.messages),
+      this.opinionDeps(cont.options.sessionId),
+    );
     if (prep.input === null || !proc.write(prep.input))
       throw new LlmError("claude process is not running", "PROVIDER_ERROR");
     proc.promptSentAt = Date.now();
+    notifier.cancel(cont.options.sessionId);
     // The guess was for the prompt that just went out; the result that follows brings a new one,
     // and only a frame after that result is stored (see `noteSuggestion`). Published at once: the
     // card's own read runs every 30 s while the stream is up, and the publish before the write
@@ -6377,6 +6491,11 @@ export class ClaudeCodeAdapter extends LlmAdapter {
           data: this.turnsReply(options.sessionId),
         });
         void saveTurnRecords(this.stateDir, options.sessionId, buf);
+        // Stop pressed in dsh aborts the step, and the CLI still answers with a result: that is the
+        // person at the desk, not a turn to tell their phone about.
+        if (!options.signal?.aborted) this.notifyLater(options.sessionId, "finished");
+        // Detached: the review reads the tree after the turn and must never hold up the next one.
+        void opinions.turnEnded(options.sessionId);
         // The window this model actually runs at, asked once per model between turns so dsh's
         // context ring is right before anyone opens the breakdown. A model switched mid-session is
         // an id this process has not asked about, so the next result asks again for the model it
@@ -6536,10 +6655,15 @@ export class ClaudeCodeAdapter extends LlmAdapter {
       // slower call with a placeholder row, left a dsh call of the same message to run without
       // its card, and a nested agent's inner result parked the step under the agent itself.
       // Nor at a user frame of the CLI's own text (a slash command's output, a compaction
-      // summary): it is no tool result, so nothing has been handed the steer.
+      // summary): it is no tool result, so nothing has been handed the steer. The CLI marks the
+      // frames it writes in the user's place `isSynthetic` (meta text such as a skill body or a
+      // hook's added context, the compaction summary, a Stop hook's block reason like the test
+      // gate's), even when the text comes in an array; a message typed meanwhile waits for a turn
+      // of its own (probed on 2.1.332), so none of them parks.
       if (
         proc.steerPending &&
         event.type === "user" &&
+        event.isSynthetic !== true &&
         Array.isArray(event.message?.content) &&
         pending.size === 0 &&
         !relaying &&
@@ -7662,6 +7786,7 @@ export class ClaudeCodeAdapter extends LlmAdapter {
       since: Date.now(),
     });
     this.publishAwaiting();
+    this.notifyLater(options.sessionId, awaitKind, requestId, toolName);
     const signal = options.signal
       ? AbortSignal.any([options.signal, controller.signal])
       : controller.signal;
@@ -7731,6 +7856,7 @@ export class ClaudeCodeAdapter extends LlmAdapter {
       since: Date.now(),
     });
     this.publishAwaiting();
+    this.notifyLater(options.sessionId, "question", requestId);
     const signal = options.signal
       ? AbortSignal.any([options.signal, controller.signal])
       : controller.signal;

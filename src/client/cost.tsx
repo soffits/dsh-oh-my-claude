@@ -17,6 +17,7 @@ import {
   type ClientCtx,
   openSessionId,
   numberOr,
+  useNarrow,
 } from "./shared.js";
 import { pollEvery, subscribe, type TurnRecord, type TurnsReply } from "./events.js";
 import { paintSpeed, tokensPerSecond } from "./speed.js";
@@ -24,6 +25,7 @@ import { Spark, sparkNode } from "./spark.js";
 import { useHintValue, useHintFlag } from "./hints.js";
 import { onBodyMutation } from "./dom.js";
 import { attachTip, hideTipFor, refreshTip } from "./tooltip.js";
+import { BOXES_EVENT } from "./picker.js";
 
 /** Cached tokens for the readout: `999`, `12.3K`, `2.1M`, and nothing at all for none. */
 export const formatCacheRead = (tokens: number): string => {
@@ -123,9 +125,9 @@ export const COST_DIALOG_CSS =
   "[data-omc-cost-title-label] svg{flex:none;width:14px;height:14px}" +
   "[data-omc-cost-title-value]{font-variant-numeric:tabular-nums}" +
   "[data-omc-cost-rule]{border-top:.5px solid var(--dsw-alias-border-l2);margin-bottom:10px}" +
-  "[data-omc-cost-details]{color:var(--dsw-alias-label-tertiary);grid-template-columns:minmax(76px,auto) minmax(0,1fr);gap:6px 16px;margin:0;display:grid}" +
+  "[data-omc-cost-details]{color:var(--omc-label-quiet);grid-template-columns:minmax(76px,auto) minmax(0,1fr);gap:6px 16px;margin:0;display:grid}" +
   "[data-omc-cost-details] dt,[data-omc-cost-details] dd{min-width:0;margin:0}" +
-  "[data-omc-cost-details] dd{color:var(--dsw-alias-label-secondary);font-variant-numeric:tabular-nums;text-align:right}" +
+  "[data-omc-cost-details] dd{color:var(--omc-label-value);font-variant-numeric:tabular-nums;text-align:right}" +
   // dsh's tooltip look (its bubble class is hashed, so the rules are copied onto our own hook,
   // on the same tokens): fixed, above the anchor, centred by the transform.
   "[data-omc-tip]{display:inline-flex;align-items:center;position:fixed;z-index:1100;width:max-content;max-width:50vw;padding:3px 7px;border-radius:var(--dsw-radius-sm);background:var(--dsw-alias-tooltip-bg);color:var(--dsw-static-neutral-bluish-00);font-size:13px;line-height:20px;white-space:pre-line;overflow-wrap:break-word;pointer-events:none;transform:translate(-50%,-100%);animation:omc-tip-in .15s var(--ds-ease-in-out,ease-in-out)}" +
@@ -136,9 +138,46 @@ export const COST_DIALOG_CSS =
   "[data-omc-cost-guard] label{display:inline-flex;align-items:center;gap:4px}" +
   "[data-omc-cost-guard] input{width:64px;font:inherit;color:inherit;background:var(--dsw-alias-bg-module-platform,rgba(128,128,128,.1));border:0;border-radius:6px;padding:2px 6px}" +
   "[data-omc-cost-guard] button{font:inherit;font-size:12px;color:inherit;background:transparent;border:1px solid var(--dsw-alias-border-l1);border-radius:999px;padding:2px 8px;cursor:pointer}" +
-  "[data-omc-cost-note]{flex-basis:100%;margin:4px 0 0;color:var(--dsw-alias-label-tertiary)}";
+  "[data-omc-cost-note]{flex-basis:100%;margin:4px 0 0;color:var(--omc-label-quiet)}" +
+  // Two labels that hold 4.5:1 on dsh's menu surface in both themes and keep the dark look as it
+  // was: dark keeps tertiary and secondary; light, where tertiary is 3.5:1, moves each up a step.
+  // dsh marks its dark theme on body, so the light values are the default and dark overrides.
+  "body{--omc-label-quiet:var(--dsw-alias-label-secondary);--omc-label-value:var(--dsw-alias-label-primary)}" +
+  "body[data-ds-dark-theme]{--omc-label-quiet:var(--dsw-alias-label-tertiary);--omc-label-value:var(--dsw-alias-label-secondary)}";
 
 let statusOnce: Promise<boolean> | undefined;
+
+/** Whether this box's Claude is logged in with a claude.ai plan, read once and shared by every
+ *  pill until BOXES_EVENT clears it. A failed read answers false (priced as API use). */
+export function subscriptionStatus(): Promise<boolean> {
+  statusOnce ??= fetch(`${ROUTE}/status`)
+    .then((r) => readJson<{ authMethod?: string | null }>(r))
+    .then((s) => s.authMethod === "claude.ai")
+    .catch(() => false);
+  return statusOnce;
+}
+
+/**
+ * Wraps `apply` so only the newest of several overlapping reads lands: a reply that comes back
+ * after a later read started is dropped. A login change can start a second /status read while the
+ * first is still out, and the first answering last would otherwise put the old plan back.
+ */
+export function newestOnly<T>(apply: (value: T) => void): (read: Promise<T>) => void {
+  let latest = 0;
+  return (read) => {
+    const mine = ++latest;
+    void read.then((v) => {
+      if (mine === latest) apply(v);
+    });
+  };
+}
+
+// A login or logout, here or in another tab, arrives as BOXES_EVENT; drop the cached answer so the
+// next read asks again. Registered at import, so it runs before any pill's own listener re-reads.
+// Optional because a test imports this module where no window exists.
+globalThis.window?.addEventListener(BOXES_EVENT, () => {
+  statusOnce = undefined;
+});
 
 /** The hashed half of a CSS-module class changes with every dsh build, the suffix does not. */
 const MODULE_ROOT = /(?:^|\s)[\w-]*_root(?:\s|$)/;
@@ -287,7 +326,16 @@ export function CostLine({ sessionId, ctx }: { sessionId: string; ctx: ClientCtx
   // Money is Claude's turns only: a turn a router answered is not priced (`TurnRecord.via`).
   const total = turns.reduce((s, r) => s + priced(r), 0);
   const last = turns[turns.length - 1];
-  const text = mine && !costOff && total > 0 && last ? costText(total, priced(last)) : "";
+  // A phone's stats row has room for one figure, so under 640 px the pill shows the session total
+  // alone; the last turn stays in its aria-label and in the dialog's Last turn row. The full text
+  // was cut to "$0.0…" at 390 px.
+  const narrow = useNarrow();
+  const text =
+    mine && !costOff && total > 0 && last
+      ? narrow
+        ? fmtCost(total)
+        : costText(total, priced(last))
+      : "";
   // Past the line the pill turns orange and the tooltip leads with the fact; every wording says
   // API-rate, since a subscription login is not billed by this figure.
   const over = mine && total > 0 && line !== undefined && total >= line;
@@ -305,13 +353,15 @@ export function CostLine({ sessionId, ctx }: { sessionId: string; ctx: ClientCtx
   const [subscription, setSubscription] = useState(false);
   useEffect(() => {
     let live = true;
-    statusOnce ??= fetch(`${ROUTE}/status`)
-      .then((r) => readJson<{ authMethod?: string | null }>(r))
-      .then((s) => s.authMethod === "claude.ai")
-      .catch(() => false);
-    void statusOnce.then((v) => live && setSubscription(v));
+    const show = newestOnly<boolean>((v) => live && setSubscription(v));
+    /** Ask for the plan (shared across pills) and show it while this pill is mounted. */
+    const load = () => show(subscriptionStatus());
+    load();
+    // A login change elsewhere re-reads, so the pill follows it without a refresh.
+    window.addEventListener(BOXES_EVENT, load);
     return () => {
       live = false;
+      window.removeEventListener(BOXES_EVENT, load);
     };
   }, []);
   const [guardDraft, setGuardDraft] = useState("");

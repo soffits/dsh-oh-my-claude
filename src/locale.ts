@@ -32,6 +32,7 @@ const preferenceOf = (read: LocaleSettingsReader): string | undefined => {
 
 const EN = {
   notLoggedIn: "not logged in",
+  mcpAuthUrlRefused: "the server's sign-in link is not an http(s) page, so it was not opened",
   planHeader: "Plan review",
   planQuestion: "Approve this plan and leave plan mode?",
   planApprove: "Approve",
@@ -181,6 +182,7 @@ const EN = {
     "/{command} works in Claude Code sessions. This session runs on {provider}; pick a Claude model to use it.",
   btwSent: "Side question sent. The answer opens in the ✻ aside bubble.",
   idleStopped: "claude produced no output for {s}s and was stopped",
+  testGateFixing: "Tests failed, Claude is fixing them ({attempt}/{tries})",
   claudeExited: "claude exited {code}: {detail}",
   noOutput: "no output",
   inputDeclined: "{who} asked for input dsh cannot present, declined",
@@ -192,6 +194,16 @@ const EN = {
   customModelMany: "A box keeps at most {max} added models.",
   customModelBox: "No Claude Code box answers to {provider}.",
   customModelUnread: "That list of models could not be read.",
+  notifyFinished: "Claude finished its turn.",
+  notifyApproval: "Claude is waiting for your approval to run {tool}.",
+  notifyQuestion: "Claude asked you a question.",
+  notifyPlan: "Claude has a plan ready for your review.",
+  notifyTest: "Test from Oh My Claude. Phone notices are set up.",
+  notifyUntitled: "Claude Code session",
+  notifyBadUrl: "A webhook address starts with http:// or https://.",
+  notifyLongUrl: "A webhook address can be at most 2,000 characters.",
+  notifyBadDevice: "This browser sent a subscription the box cannot use.",
+  notifyTooManyDevices: "This box already sends to {max} devices. Delete one first.",
 } as const;
 
 /** A key of the server's own strings. */
@@ -199,6 +211,7 @@ export type ServerKey = keyof typeof EN;
 
 const ZH = {
   notLoggedIn: "未登录",
+  mcpAuthUrlRefused: "该服务器的登录链接不是 http(s) 页面，因此未打开",
   planHeader: "计划审阅",
   planQuestion: "同意执行这份计划并退出计划模式？",
   planApprove: "同意执行",
@@ -337,6 +350,7 @@ const ZH = {
     "/{command} 只能在 Claude Code 会话中使用。此会话使用的是 {provider}；请先选择一个 Claude 模型。",
   btwSent: "旁问已发送。回答会显示在 ✻ 旁问气泡中。",
   idleStopped: "claude 连续 {s} 秒没有输出，已停止",
+  testGateFixing: "测试失败，Claude 正在修复（{attempt}/{tries}）",
   claudeExited: "claude 已退出（{code}）：{detail}",
   noOutput: "无输出",
   inputDeclined: "{who} 请求了 dsh 无法显示的输入，已拒绝",
@@ -347,6 +361,16 @@ const ZH = {
   customModelMany: "每台主机最多保存 {max} 个添加的模型。",
   customModelBox: "没有名为 {provider} 的 Claude Code 主机。",
   customModelUnread: "无法读取这份模型列表。",
+  notifyFinished: "Claude 已完成本轮。",
+  notifyApproval: "Claude 正在等你批准运行 {tool}。",
+  notifyQuestion: "Claude 向你提了一个问题。",
+  notifyPlan: "Claude 的计划已就绪，等你审阅。",
+  notifyTest: "来自 Oh My Claude 的测试。手机通知已设置好。",
+  notifyUntitled: "Claude Code 会话",
+  notifyBadUrl: "Webhook 地址须以 http:// 或 https:// 开头。",
+  notifyLongUrl: "Webhook 地址最多 2000 个字符。",
+  notifyBadDevice: "此浏览器发送的订阅无法在本机使用。",
+  notifyTooManyDevices: "本机已向 {max} 台设备发送通知。请先删除一台。",
 } satisfies Record<ServerKey, string>;
 
 let reader: LocaleSettingsReader | undefined;
