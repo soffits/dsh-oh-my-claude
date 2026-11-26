@@ -134,9 +134,12 @@ import { UNHANDLED } from "./routes/context.js";
 import { transcriptsRoutes } from "./routes/transcripts.js";
 import { filesRoutes } from "./routes/files.js";
 import { settingsRoutes } from "./routes/settings.js";
+import { testGateRoutes } from "./routes/test-gate.js";
 import { statusRoutes } from "./routes/status.js";
 import { controlsRoutes } from "./routes/controls.js";
 import { tasksRoutes } from "./routes/tasks.js";
+import { notifyRoutes, PUSH_SW_PATH, servePushSw } from "./routes/notify.js";
+import { secondOpinionRoutes } from "./routes/second-opinion.js";
 
 const ROUTE_PREFIX = "/dsh-oh-my-claude";
 /** This plugin's own key on globalThis, so a hot reload does not start a second heal sweep. */
@@ -710,7 +713,44 @@ export type FetchLike = (
   headers: { get(name: string): string | null };
   json(): Promise<unknown>;
   text(): Promise<string>;
+  body?: ReadableStream<Uint8Array> | null;
 }>;
+
+/** The most of another box's reply probeBox reads. A status is a few KB, but `sessions?all=1` lists
+ *  every transcript at about 250 bytes each, and a busy box already has 2,000 (500 KB, 2026-11-25),
+ *  so the cap leaves that list room to grow while still stopping a host that streams without end. */
+export const PROBE_REPLY_MAX = 16 * 1024 * 1024;
+
+/**
+ * A reply's text read through a byte cap, so a host that streams without end cannot fill dsh-web's
+ * memory. Throws once the reply passes `max` bytes, cancelling the rest of the stream. A reply with
+ * no stream (a test double) falls back to `text()` and is checked after the read.
+ */
+export async function cappedText(
+  r: { text(): Promise<string>; body?: ReadableStream<Uint8Array> | null },
+  max = PROBE_REPLY_MAX,
+): Promise<string> {
+  const tooBig = () => new Error(`reply larger than ${max / 1048576} MB, not read`);
+  if (!r.body) {
+    const text = await r.text();
+    if (Buffer.byteLength(text) > max) throw tooBig();
+    return text;
+  }
+  const reader = r.body.getReader();
+  const parts: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > max) {
+      await reader.cancel().catch(() => {});
+      throw tooBig();
+    }
+    parts.push(value);
+  }
+  return Buffer.concat(parts).toString("utf8");
+}
 
 /** Fetch options the probe builds, extended with optional method/body for proxy routes. */
 interface ProbeFetchOpts {
@@ -767,7 +807,7 @@ export async function probeBox<T = RuntimeStatus>(
       const front = await fetchImpl(`${url}/`, { redirect: "manual", signal });
       const hint =
         (front.headers.get("location") ?? "") +
-        (front.status === 200 ? (await front.text()).slice(0, 4000) : "");
+        (front.status === 200 ? (await cappedText(front)).slice(0, 4000) : "");
       const found = /[?&]token=([A-Za-z0-9_.~-]+)/.exec(hint);
       if (found) {
         cookie = cookieOf(
@@ -783,7 +823,7 @@ export async function probeBox<T = RuntimeStatus>(
     if (!r.ok) return { ok: false, error: `HTTP ${r.status}` };
     // SAFETY: the body is another instance of this plugin answering the same route; the caller
     // names which route it asked and only reads the fields that route publishes
-    return { ok: true, status: (await r.json()) as T };
+    return { ok: true, status: JSON.parse(await cappedText(r)) as T };
   } catch (e) {
     const cause = e instanceof Error && e.cause instanceof Error ? e.cause.message : undefined;
     return { ok: false, error: String(cause ?? errorText(e)).slice(0, 200) };
@@ -2866,6 +2906,9 @@ export function registerSessionRoutes(
       settingsRoutes(routeCtx),
       statusRoutes(routeCtx),
       controlsRoutes(routeCtx),
+      notifyRoutes(routeCtx),
+      testGateRoutes({ ROUTE_PREFIX, stateDir: STATE_DIR, json, readBody }),
+      secondOpinionRoutes(routeCtx),
     ];
     if (accounts)
       beforeBoxes.push(
@@ -2899,6 +2942,21 @@ export function registerSessionRoutes(
       );
     const afterBoxes = [tasksRoutes(routeCtx)];
     host.effect?.(() => {
+      // Exact beats prefix, so this one path skips the login the prefix route requires. Registered
+      // first: the route tests' fake webServer keeps the last handler it is given, the prefix one.
+      // A throw here (a duplicate path) must not cost the prefix route below: without the worker
+      // only phone notices' Web Push is missing, without the prefix every plugin route is.
+      let disposeSw: (() => void) | undefined;
+      try {
+        disposeSw = webServer.register({
+          kind: "exact",
+          path: PUSH_SW_PATH,
+          auth: "anonymous",
+          handler: servePushSw,
+        });
+      } catch (e) {
+        log("warn", `phone notices: worker route not registered: ${errorText(e)}`);
+      }
       const dispose = webServer.register({
         kind: "prefix",
         path: ROUTE_PREFIX,
@@ -3507,6 +3565,7 @@ export function registerSessionRoutes(
       return () => {
         events?.hub.close();
         dispose();
+        disposeSw?.();
       };
     }, "dsh-oh-my-claude session routes");
   });

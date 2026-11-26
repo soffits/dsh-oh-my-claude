@@ -767,6 +767,14 @@ export declare class ClaudeCodeAdapter extends LlmAdapter {
      * the mirror documents as starting a turn. A dsh without `cancel` (0.1.6 and earlier) gets the
      * steers put back untouched and a refusal that says so. A relay pending refuses with `relayed`:
      * the tool cannot be cut short without killing the CLI.
+     *
+     * Claude Code's own send-now over stdin is not used, on purpose. `update_queued_message` with
+     * `priority: "now"` (2.1.331) answers `unsupported_request` unless the server turns its flag on,
+     * and it, the interrupt's `send_now`, and a plain interrupt all end the turn and answer the
+     * waiting message in a turn the CLI starts itself (probed on 2.1.332, 2026-11-25). dsh never
+     * opened that turn: its answer shows only after it ends, through `wake`, and a dsh tool called
+     * inside it is declined. Switch only once such a turn can be adopted into a dsh turn as it
+     * starts.
      */
     sendSteerNow(sessionId: string, ids: string[]): Promise<SteerEditReply>;
     /**
@@ -951,6 +959,10 @@ export declare class ClaudeCodeAdapter extends LlmAdapter {
      *  answered anywhere. A mount publishing only its own map would make a tab forget the root's
      *  prompts on the next box event. */
     private publishAwaiting;
+    /** Hand a finished turn or an open prompt to the phone notifier, which sends it after the box's
+     *  delay unless the prompt with `requestId` was answered, or a prompt or steer went to the session,
+     *  by then. Does nothing while phone notices are off; the notifier reads the switch itself. */
+    private notifyLater;
     /** The asides body for one session to its streams, read from the session's mount. A publish
      *  does not re-arm hold timers (`touch: false`); only the card's own read does. */
     private publishAsides;
@@ -961,8 +973,12 @@ export declare class ClaudeCodeAdapter extends LlmAdapter {
     /** The permission mode state for one session to its streams: after a pick, a restore or a
      *  spawn, which is when `liveMode` changes. */
     private publishPermissionMode;
+    /** What a second opinion reads for one session: the CLI's diff, a new file's text on the session's
+     *  box under the checkout root (the diff names paths relative to it, not to the cwd; asked only
+     *  when a new file is read), and dsh's model service. */
+    private opinionDeps;
     /** The CLI's working-tree diff (`get_workspace_diff`) for a session with a live process. */
-    workspaceDiff(sessionId: string): Promise<WorkspaceDiffReply>;
+    workspaceDiff(sessionId: string, timeoutMs?: number): Promise<WorkspaceDiffReply>;
     /** The permission rules and hooks a session's live process actually loaded
      *  (`list_permission_rules`, `get_hooks_listing`), read-only. Both or neither: the readout is one
      *  section pair and a half-answer would read as an empty half. */

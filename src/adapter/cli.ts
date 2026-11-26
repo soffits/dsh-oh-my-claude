@@ -8,6 +8,7 @@ import { KEY_ENV, KEY_HEADER } from "../mcp-config.js";
 import { PEOPLE_INSTRUCTIONS } from "../compact-retain.js";
 import { AUTOCOMPACT_PCT_ENV } from "./cli-compaction.js";
 import { ISOLATED_ENV, ISOLATED_SETTINGS } from "./isolate.js";
+import type { stopHookSettings } from "../test-gate.js";
 import { CHILD_ENV, shq, sshArgs, userTurnLine } from "../process.js";
 import { probeRawToolRows, type RowsSupport } from "../rows-probe.js";
 import { Config } from "./config.js";
@@ -359,6 +360,7 @@ export function buildArgs({
   permissionMode,
   dshSystem,
   compactPct,
+  testGate,
 }: Pick<GenerateOptions, "reasoningEffort" | "system" | "purpose"> & {
   /** dsh's own system prompt (`dshSystemPrompt`), passed only under `systemPrompt: dsh`. It
    *  replaces Claude Code's prompt rather than following it. */
@@ -377,6 +379,9 @@ export function buildArgs({
   permissionMode?: string;
   /** Where the CLI compacts on its own, in percent of its window (`cliCompactPct`). */
   compactPct?: number | undefined;
+  /** The test gate's Stop hook (`stopHookSettings`), when the workspace has the gate on. Merged
+   *  into --settings for a session's own process; a side call never gets it. */
+  testGate?: ReturnType<typeof stopHookSettings> | undefined;
 }) {
   const args = ["-p"];
   if (usesStdin(flags)) args.push("--input-format", "stream-json");
@@ -396,7 +401,11 @@ export function buildArgs({
   // In -p mode /fast only works in a session launched with fast mode in --settings (fast-mode docs).
   const settings: Record<string, JsonValue> = config.isolate ? { ...ISOLATED_SETTINGS } : {};
   if (config.fastMode) settings.fastMode = true;
-  if (!purpose) settings.hooks = AUTO_COMPACT_HOOKS;
+  // The auto-compact hook and the test gate's Stop hook share --settings' `hooks`. A hook passed
+  // here fires under `isolate` too: --settings is a source of its own, which
+  // `--setting-sources ""` leaves on (probed on 2.1.332).
+  if (!purpose)
+    settings.hooks = testGate ? { ...AUTO_COMPACT_HOOKS, ...testGate } : AUTO_COMPACT_HOOKS;
   // In the settings' `env`, which the CLI copies into its own environment at start, so it reaches
   // a keeper and a box the same way the rest of the command line does.
   if (!purpose && compactPct !== undefined)

@@ -15,6 +15,7 @@ export interface LocaleSettingsReader {
 }
 declare const EN: {
     readonly notLoggedIn: "not logged in";
+    readonly mcpAuthUrlRefused: "the server's sign-in link is not an http(s) page, so it was not opened";
     readonly planHeader: "Plan review";
     readonly planQuestion: "Approve this plan and leave plan mode?";
     readonly planApprove: "Approve";
@@ -142,6 +143,7 @@ declare const EN: {
     readonly claudeOnly: "/{command} works in Claude Code sessions. This session runs on {provider}; pick a Claude model to use it.";
     readonly btwSent: "Side question sent. The answer opens in the ✻ aside bubble.";
     readonly idleStopped: "claude produced no output for {s}s and was stopped";
+    readonly testGateFixing: "Tests failed, Claude is fixing them ({attempt}/{tries})";
     readonly claudeExited: "claude exited {code}: {detail}";
     readonly noOutput: "no output";
     readonly inputDeclined: "{who} asked for input dsh cannot present, declined";
@@ -152,6 +154,16 @@ declare const EN: {
     readonly customModelMany: "A box keeps at most {max} added models.";
     readonly customModelBox: "No Claude Code box answers to {provider}.";
     readonly customModelUnread: "That list of models could not be read.";
+    readonly notifyFinished: "Claude finished its turn.";
+    readonly notifyApproval: "Claude is waiting for your approval to run {tool}.";
+    readonly notifyQuestion: "Claude asked you a question.";
+    readonly notifyPlan: "Claude has a plan ready for your review.";
+    readonly notifyTest: "Test from Oh My Claude. Phone notices are set up.";
+    readonly notifyUntitled: "Claude Code session";
+    readonly notifyBadUrl: "A webhook address starts with http:// or https://.";
+    readonly notifyLongUrl: "A webhook address can be at most 2,000 characters.";
+    readonly notifyBadDevice: "This browser sent a subscription the box cannot use.";
+    readonly notifyTooManyDevices: "This box already sends to {max} devices. Delete one first.";
 };
 /** A key of the server's own strings. */
 export type ServerKey = keyof typeof EN;
