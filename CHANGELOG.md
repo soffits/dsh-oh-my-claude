@@ -6,6 +6,10 @@ Versions from 1.0.0 up are on npm. Everything below 1.0.0 was released from the 
 
 ## [Unreleased]
 
+## [1.7.1] - 2026-11-27
+
+dsh: runs on 0.2.2-alpha.2 through 0.2.3-alpha.2; built and tested on 0.2.3-alpha.2.
+
 ### Added
 
 - A `compact` tool the model can call itself, on any route: the session compacts once the current turn ends, and the optional `keep` text (someone's exact words, open promises, the next step) is put back word for word right after the summary, and on Claude also goes into `/compact`'s instructions. The tool answers how full the context is, and a session nearing automatic compaction is told so once at the end of a turn (`compactNotice`, 0.8 of the way there by default), so the model can compact at a natural break before the automatic one cuts in.
