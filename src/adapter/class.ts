@@ -32,6 +32,15 @@ import {
   widenPreserved,
 } from "../compact-retain.js";
 import {
+  type ContextFill,
+  fillDue,
+  fillNotice,
+  keepInstructions,
+  keepNote,
+  notRunNote,
+  scheduledText,
+} from "../self-compact.js";
+import {
   CONTEXT_SIZE_KEYS,
   contextDrops,
   type ContextSizes,
@@ -2173,6 +2182,13 @@ export class ClaudeCodeAdapter extends LlmAdapter {
    *  that turn's step is refused, or the CLI would compact twice, the second time a summary of its
    *  own summary; the turn's `compact_boundary` feeds `syncCompaction` instead. Cleared at turn start. */
   readonly compactQueued = new Set<string>();
+  /** Compactions the model asked for with the `compact` tool, by dsh session id, with the text it
+   *  wants kept. Unlike an owed compaction they outlive a new turn: they run at the first idle
+   *  moment (`syncCompaction`) and are dropped only once they ran or failed. */
+  readonly requestedCompactions = new Map<string, { keep: string }>();
+  /** Sessions already told their context is near automatic compaction (`noticeFill`); told again
+   *  once a compaction has brought them back under the notice level. */
+  readonly fillNoticed = new Set<string>();
 
   /**
    * Shadow dsh's `/compact` for one Claude session with Claude Code's. dsh's global `/compact`
@@ -7182,17 +7198,22 @@ export class ClaudeCodeAdapter extends LlmAdapter {
   }
 
   /** Compact dsh's copy once the agent is idle, after a compaction Claude Code made during a turn
-   *  (answered from the pending summary, so no model runs) or one refused mid-turn (answered with
-   *  `/compact` on the CLI). Never on a child agent: dsh settles it when it is idle and the parent
-   *  waits on that; the child's next turn compacts at its start instead. */
+   *  (answered from the pending summary, so no model runs), one refused mid-turn (answered with
+   *  `/compact` on the CLI), or one the model asked for (`requestCompaction`), on any route. Never
+   *  on a child agent: dsh settles it when it is idle and the parent waits on that; the child's
+   *  next turn compacts at its start instead. */
   async syncCompaction(sessionId: string, retries = 1): Promise<void> {
     const agent = this.ctx?.agents?.get?.(asSessionId(sessionId));
     const compaction = this.compactionService(sessionId);
     const note = (line: string) =>
       trace(join(this.stateDir, "resume.log"), `compaction ${sessionId}: sync ${line}`);
+    const due = () =>
+      this.pendingCompactions.has(sessionId) ||
+      this.owedCompactions.has(sessionId) ||
+      this.requestedCompactions.has(sessionId);
     if (this.syncingCompactions.has(sessionId)) return;
     if (!agent?.whenIdle || !compaction) {
-      if (this.pendingCompactions.has(sessionId) || this.owedCompactions.has(sessionId))
+      if (due())
         await note(`skipped, ${!agent?.whenIdle ? "no live agent" : "no compaction service"}`);
       return;
     }
@@ -7201,11 +7222,12 @@ export class ClaudeCodeAdapter extends LlmAdapter {
     let busy = false;
     try {
       await agent.whenIdle();
-      if (!this.pendingCompactions.has(sessionId) && !this.owedCompactions.has(sessionId)) return;
+      if (!due()) return;
       const result = await compaction.compactNow(agent, new AbortController().signal);
       await note(result === null ? "ran, dsh had nothing to compact" : "ran");
       if (result === null) this.pendingCompactions.delete(sessionId);
       this.owedCompactions.delete(sessionId);
+      this.settleRequested(agent, result === null ? { kind: "unchanged" } : { kind: "compacted" });
     } catch (error) {
       busy = error instanceof Error && "code" in error && error.code === "busy";
       if (!busy) {
@@ -7213,14 +7235,108 @@ export class ClaudeCodeAdapter extends LlmAdapter {
         this.owedCompactions.delete(sessionId);
         this.log("warn", `compaction sync ${sessionId}: ${errorText(error)}`);
         await note(`failed: ${errorText(error)}`);
+        this.settleRequested(agent, { kind: "failed", why: errorText(error) });
       }
     } finally {
       this.syncingCompactions.delete(sessionId);
     }
     // New work beat the sync to the agent: try once more after it. Bounded, since an idle agent
     // with queued work answers `busy` at once; past that, the next Claude turn drops what is left
-    // and dsh's check at its start compacts if it still has to.
+    // and dsh's check at its start compacts if it still has to. A requested compaction is kept
+    // and tried again when the agent next goes idle (`onAgentIdle`).
     if (busy && retries > 0) void this.syncCompaction(sessionId, retries - 1);
+  }
+
+  /**
+   * The `compact` tool: compact this session once its turn ends, putting `keep` back word for word
+   * after the summary. Answers the model with how full its context is now. A child agent's turn
+   * ending is its final answer, so there is no later moment to compact at there.
+   */
+  async requestCompaction(agent: Agent, keep: string): Promise<string> {
+    const sessionId = String(agent.id);
+    if (this.isSubagentSession(sessionId))
+      return "compact runs only in a top-level session; a subagent's turn ending is its final answer, so there is no later moment to compact at.";
+    const fill = await this.contextFill(sessionId);
+    this.requestedCompactions.set(sessionId, { keep });
+    await trace(
+      join(this.stateDir, "resume.log"),
+      `compaction ${sessionId}: requested by the model${keep ? `, ${keep.length} chars to keep` : ""}`,
+    );
+    void this.syncCompaction(sessionId);
+    return scheduledText(fill);
+  }
+
+  /** Close a compaction the model asked for, once dsh's compaction ran for the session: the kept
+   *  text goes in right after the summary, or a line says why nothing changed. Injected, not sent:
+   *  it waits for the session's next turn instead of opening one. */
+  settleRequested(
+    agent: Agent,
+    outcome: { kind: "compacted" } | { kind: "unchanged" } | { kind: "failed"; why: string },
+  ): void {
+    const sessionId = String(agent.id);
+    const request = this.requestedCompactions.get(sessionId);
+    if (!request) return;
+    this.requestedCompactions.delete(sessionId);
+    // Nothing to condense: the conversation, and the tool call that holds the text, are unchanged.
+    if (outcome.kind === "unchanged") return;
+    const text =
+      outcome.kind === "failed" ? notRunNote(outcome.why) : request.keep && keepNote(request.keep);
+    if (text) this.injectNotice(agent, text);
+  }
+
+  /** Queue one of this plugin's notices as context for the session's next request. */
+  injectNotice(agent: Agent, text: string): void {
+    try {
+      agent.inject?.(
+        createUserMessage({
+          content: [{ type: "text", text }],
+          // SAFETY: the v4 source shape goes through dsh-llm 0.1.6's stale type, as in `wake`
+          source: noticeSource(text, false, agent.session?.header?.version ?? 4) as MessageSource,
+        }),
+      );
+    } catch (error) {
+      this.log("warn", `notice for ${String(agent.id)}: ${errorText(error)}`);
+    }
+  }
+
+  /** How full a session's context is, by dsh's own measure of its next request, and where its
+   *  automatic compaction fires. Undefined before its first request or without a token meter. */
+  async contextFill(sessionId: string): Promise<ContextFill | undefined> {
+    const session = this.ctx?.sessions?.get?.(asSessionId(sessionId));
+    const route = session?.requestHeader()?.config;
+    const meter = this.ctx?.get?.("tokenMeter");
+    if (!session || !route?.provider || !route.model || !meter || !this.ctx?.llm?.resolveModelInfo)
+      return undefined;
+    try {
+      const { provider, model } = route;
+      const info = await this.ctx.llm.resolveModelInfo(provider, model);
+      const window = info.context?.contextWindow;
+      if (!window) return undefined;
+      const used = meter.measure(session).totalTokens;
+      const settings = this.compactionService(sessionId)?.config;
+      const at = cliCompactPct(settings, { provider, model }, window, info.defaultMaxTokens);
+      return { used, window, auto: at === undefined ? undefined : Math.floor((window * at) / 100) };
+    } catch (error) {
+      this.log("warn", `context fill for ${sessionId}: ${errorText(error)}`);
+      return undefined;
+    }
+  }
+
+  /** A top-level session's turn ended: run a compaction the model asked for that is still waiting,
+   *  and tell the model once when its context has come near automatic compaction, so it can pick
+   *  its own moment first. The line is injected for the next turn, never a turn of its own. */
+  async onAgentIdle(agent: Agent): Promise<void> {
+    const sessionId = String(agent.id);
+    if (this.isSubagentSession(sessionId)) return;
+    if (this.requestedCompactions.has(sessionId)) return void this.syncCompaction(sessionId);
+    const share = this.config.compactNotice;
+    if (share <= 0) return;
+    const fill = await this.contextFill(sessionId);
+    if (!fill) return;
+    if (!fillDue(fill, share)) return void this.fillNoticed.delete(sessionId);
+    if (this.fillNoticed.has(sessionId)) return;
+    this.fillNoticed.add(sessionId);
+    this.injectNotice(agent, fillNotice(fill));
   }
 
   /** Run `/compact` on the session's idle Claude Code, started on the last turn's spec when it is
@@ -7258,7 +7374,8 @@ export class ClaudeCodeAdapter extends LlmAdapter {
     proc.lastUsed = Date.now();
     signal?.addEventListener("abort", onAbort, { once: true });
     try {
-      const command = `/compact ${summaryInstructions(instructions)}`;
+      const keep = this.requestedCompactions.get(sessionId)?.keep ?? "";
+      const command = `/compact ${summaryInstructions(instructions, keepInstructions(keep))}`;
       if (!proc.write(buildInput(command, []))) return undefined;
       this.armIdle(idleKey, proc, false);
       for (;;) {

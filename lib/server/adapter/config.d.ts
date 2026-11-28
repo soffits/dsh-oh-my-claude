@@ -66,6 +66,7 @@ export type Config = {
     redactSecrets: boolean;
     persistTodos: boolean;
     cliCompaction: boolean;
+    compactNotice: number;
     debug: boolean;
     approvals: boolean;
     processIdleMs: number;
@@ -137,6 +138,7 @@ export declare const Config: z<Schemastery.ObjectS<{
     redactSecrets: z<boolean, boolean>;
     persistTodos: z<boolean, boolean>;
     cliCompaction: z<boolean, boolean>;
+    compactNotice: z<number, number>;
     refusalAsFailure: z<boolean, boolean>;
     continueAfterLimit: z<boolean, boolean>;
     debug: z<boolean, boolean>;
@@ -196,6 +198,7 @@ export declare const Config: z<Schemastery.ObjectS<{
     redactSecrets: z<boolean, boolean>;
     persistTodos: z<boolean, boolean>;
     cliCompaction: z<boolean, boolean>;
+    compactNotice: z<number, number>;
     refusalAsFailure: z<boolean, boolean>;
     continueAfterLimit: z<boolean, boolean>;
     debug: z<boolean, boolean>;

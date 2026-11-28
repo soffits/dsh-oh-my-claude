@@ -109,6 +109,7 @@ export type Config = {
   redactSecrets: boolean;
   persistTodos: boolean;
   cliCompaction: boolean;
+  compactNotice: number;
   debug: boolean;
   approvals: boolean;
   processIdleMs: number;
@@ -332,6 +333,14 @@ export const Config = z.object({
     .default(true)
     .description(
       "When dsh compacts a Claude session, have that session's Claude Code run /compact (or reuse the compaction it just made) and hand dsh its summary, so both sides compact once, at dsh's threshold, with one summary. Claude Code is also started to compact on its own at dsh's threshold, so a long turn compacts inside the turn rather than at Claude Code's own (about 97% of the window). A session moving to another provider keeps dsh's own summarizer",
+    ),
+  compactNotice: z
+    .number()
+    .min(0)
+    .max(1)
+    .default(0.8)
+    .description(
+      "When a session's context passes this share of the way to automatic compaction, tell its model once, at the end of a turn, how full it is, so it can call the compact tool at a natural break first. 0 turns the line off; the compact tool works either way",
     ),
   refusalAsFailure: z
     .boolean()

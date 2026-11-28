@@ -5,12 +5,13 @@ import { accountIdentity, readSshBoxes, registerSessionRoutes } from "./sessions
 import { hub } from "./events.js";
 import { registerUsageRoute } from "./usage.js";
 import { registerMcpBridge } from "./mcp.js";
-import type { PluginContext, SessionController, SubprocessRuntime } from "./dsh.js";
+import type { Agent, PluginContext, SessionController, SubprocessRuntime } from "./dsh.js";
 import { ADAPTER_CURRENT, COMMAND_CATALOG, RESUME_TIMER, WATCH_SWEEP } from "./dsh.js";
 import { CLAUDE_HOME, loadStarted, loadCommandCatalog, STATE_DIR, trace } from "./state.js";
 import { type ToolMode } from "./rows-probe.js";
 import { errorText } from "./process.js";
 import { bindServerLocale } from "./locale.js";
+import { compactTool } from "./self-compact.js";
 export { markBusy, takeInterrupted } from "./state.js";
 export { forkTranscriptText } from "./transcript.js";
 export { Translator, type TranslatorBlock, type FallbackRecord } from "./translator.js";
@@ -274,6 +275,28 @@ export function apply(ctx: PluginContext, config: Schemastery.TypeT<typeof Confi
   if (adapter.providerId !== "claude-code") {
     adapter.log("info", "panel/routes/usage belong to the default claude-code instance");
   } else {
+    // The `compact` tool and the end-of-turn fill line serve every session, whatever its route,
+    // so one instance registers them; each call goes to the instance that owns the session.
+    ctx.inject?.(["tools"], (host) => {
+      host.tools?.register?.(
+        compactTool<Agent>((agent, keep) =>
+          adapter.ownerFor(String(agent.id)).requestCompaction(agent, keep),
+        ),
+      );
+    });
+    ctx.on?.(
+      "agent/status",
+      (payload) => {
+        // SAFETY: dsh's agent/status carries { agent, status }
+        const { agent, status } = payload as { agent?: Agent; status?: string };
+        if (status !== "idle" || agent === undefined) return;
+        void adapter
+          .ownerFor(String(agent.id))
+          .onAgentIdle(agent)
+          .catch((e) => adapter.log("warn", `idle check: ${errorText(e)}`));
+      },
+      { global: true },
+    );
     // The SSH boxes the default instance mounts. `sshMounts` is scope-local (rebuilt each apply, since
     // a hot reload disposes the registrations); `sshAdapters` is the shared registry the resume walks.
     const sshMounts = new Map<string, SshBoxMount>();
