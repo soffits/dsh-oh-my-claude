@@ -1,6 +1,7 @@
 import type { Spawner, SubprocessHandle, CliModel } from "../process.js";
 import { type PluginLoadError } from "../plugins.js";
 import { LlmAdapter, type GenerateOptions, type LlmResolvedModelInfo, type StreamChunk } from "@deepseek-ai/dsh-llm";
+import { type ContextFill } from "../self-compact.js";
 import { type ContextSource } from "../context-sources.js";
 import { type PickerRow } from "../sessions.js";
 import { type OmcEvent } from "../events.js";
@@ -548,6 +549,7 @@ export declare class ClaudeCodeAdapter extends LlmAdapter {
         redactSecrets: import("@deepseek-ai/schemastery").default<boolean, boolean>;
         persistTodos: import("@deepseek-ai/schemastery").default<boolean, boolean>;
         cliCompaction: import("@deepseek-ai/schemastery").default<boolean, boolean>;
+        compactNotice: import("@deepseek-ai/schemastery").default<number, number>;
         refusalAsFailure: import("@deepseek-ai/schemastery").default<boolean, boolean>;
         continueAfterLimit: import("@deepseek-ai/schemastery").default<boolean, boolean>;
         debug: import("@deepseek-ai/schemastery").default<boolean, boolean>;
@@ -633,6 +635,15 @@ export declare class ClaudeCodeAdapter extends LlmAdapter {
      *  that turn's step is refused, or the CLI would compact twice, the second time a summary of its
      *  own summary; the turn's `compact_boundary` feeds `syncCompaction` instead. Cleared at turn start. */
     readonly compactQueued: Set<string>;
+    /** Compactions the model asked for with the `compact` tool, by dsh session id, with the text it
+     *  wants kept. Unlike an owed compaction they outlive a new turn: they run at the first idle
+     *  moment (`syncCompaction`) and are dropped only once they ran or failed. */
+    readonly requestedCompactions: Map<string, {
+        keep: string;
+    }>;
+    /** Sessions already told their context is near automatic compaction (`noticeFill`); told again
+     *  once a compaction has brought them back under the notice level. */
+    readonly fillNoticed: Set<string>;
     /**
      * Shadow dsh's `/compact` for one Claude session with Claude Code's. dsh's global `/compact`
      * condenses dsh's own copy of the conversation, which Claude never reads, so typed in a Claude
@@ -1498,10 +1509,37 @@ export declare class ClaudeCodeAdapter extends LlmAdapter {
      *  ACP profile keeps it). */
     compactionService(sessionId: string): import("../dsh.js").CompactionService | undefined;
     /** Compact dsh's copy once the agent is idle, after a compaction Claude Code made during a turn
-     *  (answered from the pending summary, so no model runs) or one refused mid-turn (answered with
-     *  `/compact` on the CLI). Never on a child agent: dsh settles it when it is idle and the parent
-     *  waits on that; the child's next turn compacts at its start instead. */
+     *  (answered from the pending summary, so no model runs), one refused mid-turn (answered with
+     *  `/compact` on the CLI), or one the model asked for (`requestCompaction`), on any route. Never
+     *  on a child agent: dsh settles it when it is idle and the parent waits on that; the child's
+     *  next turn compacts at its start instead. */
     syncCompaction(sessionId: string, retries?: number): Promise<void>;
+    /**
+     * The `compact` tool: compact this session once its turn ends, putting `keep` back word for word
+     * after the summary. Answers the model with how full its context is now. A child agent's turn
+     * ending is its final answer, so there is no later moment to compact at there.
+     */
+    requestCompaction(agent: Agent, keep: string): Promise<string>;
+    /** Close a compaction the model asked for, once dsh's compaction ran for the session: the kept
+     *  text goes in right after the summary, or a line says why nothing changed. Injected, not sent:
+     *  it waits for the session's next turn instead of opening one. */
+    settleRequested(agent: Agent, outcome: {
+        kind: "compacted";
+    } | {
+        kind: "unchanged";
+    } | {
+        kind: "failed";
+        why: string;
+    }): void;
+    /** Queue one of this plugin's notices as context for the session's next request. */
+    injectNotice(agent: Agent, text: string): void;
+    /** How full a session's context is, by dsh's own measure of its next request, and where its
+     *  automatic compaction fires. Undefined before its first request or without a token meter. */
+    contextFill(sessionId: string): Promise<ContextFill | undefined>;
+    /** A top-level session's turn ended: run a compaction the model asked for that is still waiting,
+     *  and tell the model once when its context has come near automatic compaction, so it can pick
+     *  its own moment first. The line is injected for the next turn, never a turn of its own. */
+    onAgentIdle(agent: Agent): Promise<void>;
     /** Run `/compact` on the session's idle Claude Code, started on the last turn's spec when it is
      *  not running, and read back its summary. Undefined when the CLI could not or did not compact. */
     compactOnCli(sessionId: string, signal?: AbortSignal): Promise<string | undefined>;

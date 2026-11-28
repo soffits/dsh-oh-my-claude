@@ -689,4 +689,122 @@ const compactingCli = (path: string) => {
   assert.equal(await adapterWith().retentionBudget("s1"), 0, "no route on record: nothing kept");
 }
 
+// The `compact` tool: the model asks, the compaction runs once the agent is idle, on any route,
+// and what it asked to keep is injected after the summary for its next turn.
+{
+  type Compacted = { shadowedSeqs: number[]; shadowedTokenCount: number } | null;
+  let answer: () => Promise<Compacted> = async () => ({ shadowedSeqs: [1], shadowedTokenCount: 9 });
+  const calls: string[] = [];
+  const injected: string[] = [];
+  const agent = {
+    id: "s1",
+    whenIdle: async () => {},
+    inject: (m: { content: { text: string }[] }) => injected.push(m.content[0]!.text),
+  };
+  let used = 490_000;
+  const fillCtx = (header: object = {}) => ({
+    agents: { get: () => agent },
+    sessions: sessionsWith(header, [], { provider: "deepseek", model: "deepseek-v4" }),
+    llm: { resolveModelInfo: async () => ({ context: { contextWindow: 1_000_000 } }) },
+    get: (name: string) =>
+      name === "compaction"
+        ? {
+            config: { thresholdRatio: 0.6 },
+            compactNow: async () => {
+              calls.push("compactNow");
+              return answer();
+            },
+          }
+        : name === "tokenMeter"
+          ? { measure: () => ({ totalTokens: used }) }
+          : undefined,
+  });
+  const a = adapterWith(fillCtx());
+  // SAFETY: partial fake agent; the code under test reads only id, whenIdle and inject
+  const asAgent = agent as unknown as Parameters<typeof a.requestCompaction>[0];
+  const settled = async () => {
+    for (let i = 0; i < 1000 && a.syncingCompactions.has("s1"); i++)
+      await new Promise((r) => setTimeout(r, 5));
+  };
+
+  const reply = await a.requestCompaction(asAgent, "next: run the tests\n- keep the tail");
+  assert.match(reply, /runs once this turn ends/);
+  assert.match(
+    reply,
+    /490k of 1M tokens \(49%\); automatic compaction at 60%/,
+    "fill on a dsh route",
+  );
+  await settled();
+  assert.deepEqual(calls, ["compactNow"]);
+  assert.equal(a.requestedCompactions.has("s1"), false, "done once it ran");
+  assert.equal(injected.length, 1);
+  assert.ok(injected[0]!.endsWith("\n\nnext: run the tests\n- keep the tail"), "word for word");
+
+  // Nothing to condense: nothing changed, so nothing is put back. A failure says why.
+  injected.length = 0;
+  answer = async () => null;
+  await a.requestCompaction(asAgent, "x");
+  await settled();
+  assert.deepEqual(injected, []);
+  answer = async () => {
+    throw new Error("summary rejected");
+  };
+  await a.requestCompaction(asAgent, "x");
+  await settled();
+  assert.match(injected[0] ?? "", /did not run \(summary rejected\)/);
+
+  // New work keeps beating it to the agent: the request stays and runs at the next idle.
+  const busy = Object.assign(new Error("busy"), { code: "busy" });
+  answer = async () => {
+    throw busy;
+  };
+  calls.length = 0;
+  injected.length = 0;
+  await a.requestCompaction(asAgent, "later");
+  await settled();
+  await settled();
+  assert.deepEqual(calls, ["compactNow", "compactNow"]);
+  assert.equal(a.requestedCompactions.get("s1")?.keep, "later", "kept across the busy answers");
+  answer = async () => ({ shadowedSeqs: [1], shadowedTokenCount: 9 });
+  await a.onAgentIdle(asAgent);
+  await settled();
+  assert.equal(a.requestedCompactions.has("s1"), false);
+  assert.match(injected[0] ?? "", /later$/);
+
+  // The fill line: once past the level, again only after the context fell back under it.
+  injected.length = 0;
+  await a.onAgentIdle(asAgent);
+  await a.onAgentIdle(asAgent);
+  assert.equal(injected.length, 1, "said once");
+  assert.match(injected[0]!, /^\[Oh My Claude\] Context in use: 490k .* call compact/);
+  used = 100_000;
+  await a.onAgentIdle(asAgent);
+  used = 500_000;
+  await a.onAgentIdle(asAgent);
+  assert.equal(injected.length, 2, "re-armed after a compaction");
+  const quiet = adapterWith(fillCtx(), { compactNotice: 0 });
+  injected.length = 0;
+  await quiet.onAgentIdle(asAgent);
+  assert.deepEqual(injected, [], "off");
+
+  // A subagent's turn ending is its answer: nothing is scheduled there.
+  const child = adapterWith(fillCtx({ origin: "subagent" }));
+  assert.match(await child.requestCompaction(asAgent, "x"), /only in a top-level session/);
+  assert.equal(child.requestedCompactions.size, 0);
+}
+
+// On a Claude route the kept text also reaches Claude Code's `/compact` instructions.
+{
+  const a = adapterWith();
+  const { proc, written } = cliAnswering([boundary]);
+  a.processes.set(registryKey(a.providerId, "s1"), proc);
+  a.compactSummary = async () => "fresh summary";
+  a.requestedCompactions.set("s1", { keep: "the next step\nis the tests" });
+  assert.equal(await a.compactionFromCli("s1"), "fresh summary");
+  assert.match(
+    written[0]!,
+    /"\/compact Open the summary .*The assistant asked for this compaction.*The text: the next step is the tests"/,
+  );
+}
+
 console.log("cli-compaction ok");

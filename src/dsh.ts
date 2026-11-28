@@ -172,6 +172,9 @@ export interface Agent {
   cancel?(cause: { kind: "user" }, options?: { keepInbox?: boolean }): void;
   /** Resolves once no turn or maintenance task is running (dsh 0.1.7). */
   whenIdle?(): Promise<void>;
+  /** Queue context for the next request without opening a turn: a running turn takes it at its
+   *  next step, an idle one with its next prompt. */
+  inject?(message: Message): void;
   /** dsh-agent-loop's pending input. Present on a live ReactLoopAgent; optional because the mirror
    *  also types agents dsh built some other way. `replace` and `remove` answer false once the
    *  message is no longer pending. */
@@ -405,6 +408,17 @@ export interface DshTool {
 export interface DshToolsRegistry {
   schemas(agent: Agent): ToolSchema[];
   get(name: string, agent: Agent): DshTool | undefined;
+  /** dsh-tools `ToolRegistry.register`: a definition is a schema plus `output` (a JSON schema and
+   *  how a value renders) and `execute`; answers the disposer. */
+  register?(
+    definition: ToolSchema & {
+      output: {
+        schema: Record<string, JsonValue>;
+        render(args: Record<string, JsonValue>, value: JsonValue): JsonValue;
+      };
+      execute(args: Record<string, JsonValue>, exec: { agent?: Agent }): Promise<JsonValue>;
+    },
+  ): () => void;
 }
 /** Mirrors: @deepseek-ai/dsh-host-webserver/lib/types/index.d.ts */
 export interface WebServer {
@@ -499,6 +513,13 @@ export interface PluginContext {
      *  adapter may describe any model id, so an unknown model can pass here: dsh's own switch checks
      *  `listModels` first, and so does the bridge. */
     resolveCallConfig(config: ModelRoute, signal?: AbortSignal): Promise<ModelRoute>;
+    /** A model's metadata, its window included, from the adapter that serves its provider.
+     *  Optional: the suites' fakes carry none. */
+    resolveModelInfo?(
+      provider: string,
+      model: string,
+      signal?: AbortSignal,
+    ): Promise<import("@deepseek-ai/dsh-llm").LlmResolvedModelInfo>;
     /** Resolves one call and binds it to the adapter that will stream it, the way dsh's own
      *  session-title call does (dsh-session-title-llm 0.2.3). Optional: the suites' fakes carry
      *  none, and a second opinion without it reports its model as unavailable. */
@@ -614,6 +635,9 @@ export interface PluginContext {
   /** dsh's compaction seam (`dsh-compaction`) at the root, mounted when a backend is. dsh's web and
    *  desktop profiles disable it and mount one inside each agent preset; see `agentPresets`. */
   get(name: "compaction"): CompactionService | undefined;
+  /** Mirrors @deepseek-ai/dsh-token-meter: what a session's next request costs, by the provider's
+   *  last reported usage plus an estimate of what was added since. */
+  get(name: "tokenMeter"): { measure(session: Session): { totalTokens: number } } | undefined;
   /** Mirrors @deepseek-ai/dsh-agent-preset-registry `AgentPresetRegistry`. `serviceFor` is a service
    *  supplied inside the agent's isolated preset group, undefined when its preset has none; `list`
    *  is the presets a session can start under; `presetForSession` is the one a session runs, fixed

@@ -280,9 +280,10 @@ export const PEOPLE_INSTRUCTIONS =
   "that language. Write the rest of the summary in the language of the newest of those " +
   "messages, keeping names, paths, commands and code as they are.";
 
-/** The whole `/compact` argument: the people section, then the verbatim-tail note when there is one. */
-export const summaryInstructions = (retain: string | undefined): string =>
-  [PEOPLE_INSTRUCTIONS, retain].filter(Boolean).join(" ");
+/** The whole `/compact` argument: the people section, then each further note there is, in order
+ *  (the verbatim-tail note, what the model asked to keep). */
+export const summaryInstructions = (...notes: (string | undefined)[]): string =>
+  [PEOPLE_INSTRUCTIONS, ...notes].filter(Boolean).join(" ");
 
 /** The boundary row as the CLI wrote it; only the metadata is touched. */
 interface RawBoundary {
